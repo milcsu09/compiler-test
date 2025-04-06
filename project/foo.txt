@@ -1,0 +1,9 @@
+
+define avarage(a, b)
+  (a + b) / 2;
+
+extern sqrt(a);
+
+define c_side(a, b)
+  sqrt(a * a + b * b);
+
