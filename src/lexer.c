@@ -55,9 +55,8 @@ lexer_advance_token (struct lexer *lexer, size_t type)
   return token;
 }
 
-/*
 static struct token
-lexer_advance_n_token (struct lexer *lexer, size_t n, size_t type)
+lexer_advance_token_n (struct lexer *lexer, size_t n, size_t type)
 {
   struct token token;
 
@@ -67,7 +66,6 @@ lexer_advance_n_token (struct lexer *lexer, size_t n, size_t type)
 
   return token;
 }
-*/
 
 static struct token
 lexer_advance_identifier_n (struct lexer *lexer, size_t n)
@@ -83,14 +81,12 @@ lexer_advance_identifier_n (struct lexer *lexer, size_t n)
   return token;
 }
 
-/*
 static int
 lexer_match (struct lexer *lexer, const char *s)
 {
   size_t length = strlen (s);
   return strncmp (lexer->current, s, length) == 0;
 }
-*/
 
 static int
 lexer_is_digit_base (char c, int base)
@@ -117,9 +113,9 @@ lexer_lex_number_base (struct lexer *lexer, int base)
   while (lexer_is_digit_base (*lexer->current, base))
     lexer_advance (lexer);
 
-  double f = strtod (start, NULL);
+  int i = strtol (start, NULL, base);
 
-  return token_create_f (f, TOKEN_NUMBER, location);
+  return token_create_f ((double)i, TOKEN_NUMBER, location);
 }
 
 static struct token
@@ -181,10 +177,24 @@ lexer_lex_identifier (struct lexer *lexer)
   while (isalnum (*lexer->current) || *lexer->current == '_')
     lexer_advance (lexer);
 
-  if (strncmp (start, "define", 6) == 0)
-    return token_create (TOKEN_DEFINE, location);
-  if (strncmp (start, "extern", 6) == 0)
-    return token_create (TOKEN_EXTERN, location);
+  // if (strncmp (start, "define", 6) == 0)
+  //   return token_create (TOKEN_DEFINE, location);
+  // if (strncmp (start, "extern", 6) == 0)
+  //   return token_create (TOKEN_EXTERN, location);
+
+  char *s = string_copy_until (start, lexer->current, lexer->arena);
+
+  return token_create_s (s, TOKEN_IDENTIFIER, location);
+}
+
+static struct token
+lexer_lex_operator (struct lexer *lexer)
+{
+  struct location location = lexer->location;
+  const char *start = lexer->current;
+
+  while (ispunct (*lexer->current))
+    lexer_advance (lexer);
 
   char *s = string_copy_until (start, lexer->current, lexer->arena);
 
@@ -220,14 +230,18 @@ lexer_next (struct lexer *lexer)
     //   return lexer_advance_token (lexer, TOKEN_LBRACKET);
     // case ']':
     //   return lexer_advance_token (lexer, TOKEN_RBRACKET);
-    // case '{':
-    //   return lexer_advance_token (lexer, TOKEN_LBRACE);
-    // case '}':
-    //   return lexer_advance_token (lexer, TOKEN_RBRACE);
+    case '{':
+      return lexer_advance_token (lexer, TOKEN_LBRACE);
+    case '}':
+      return lexer_advance_token (lexer, TOKEN_RBRACE);
     case '=':
       return lexer_advance_token (lexer, TOKEN_EQUAL);
     case ',':
       return lexer_advance_token (lexer, TOKEN_COMMA);
+    case '.':
+      if (lexer_match (lexer, "..."))
+        return lexer_advance_token_n (lexer, 3, TOKEN_3DOT);
+      break;
     case '+':
       return lexer_advance_identifier_n (lexer, 1);
     case '-':
@@ -249,6 +263,9 @@ lexer_next (struct lexer *lexer)
 
   if (isalpha (c) || c == '_')
     return lexer_lex_identifier (lexer);
+
+  if (ispunct (c))
+    return lexer_lex_operator (lexer);
 
   return token_create_e (error_create ("unexpected character %c", c),
                          lexer->location);

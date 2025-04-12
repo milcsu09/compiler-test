@@ -16,6 +16,7 @@ enum ast_type
   AST_IDENTIFIER,
   AST_NUMBER,
   AST_BINARY,
+  AST_COMPOUND,
   AST_CALL,
   AST_PROTOTYPE,
   AST_FUNCTION,
@@ -29,6 +30,7 @@ struct ast
   struct location location;
   struct ast *child;
   struct ast *next;
+  int state;
 };
 
 const char *ast_type_string (enum ast_type);

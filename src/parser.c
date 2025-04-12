@@ -1,7 +1,10 @@
 #include "ast.h"
 #include "parser.h"
 #include "string.h"
+#include <stdlib.h>
 #include <string.h>
+
+#include <stdio.h>
 
 struct parser
 parser_create (struct lexer *lexer, struct arena *arena)
@@ -17,17 +20,36 @@ parser_create (struct lexer *lexer, struct arena *arena)
 struct precedence
 {
   const char *key;
-  int precedence;
+  double precedence;
 };
 
-static struct precedence PRECEDENCE_TABLE[] = {
-  { "+", 35 },
-  { "-", 35 },
+static struct precedence PRECEDENCE_TABLE[128]; // = {
+//  { "+", 35.0 },
+//  { "-", 35.0 },
+//
+//  { "*", 40.0 },
+//  { "/", 40.0 },
+// };
 
-  { "*", 40 },
-  { "/", 40 },
+size_t precedence_n = 0;
 
-};
+void
+precedence_table_add (const char *key, double precedence)
+{
+  struct precedence p;
+
+  p.key = string_copy (key, NULL);
+  p.precedence = precedence;
+
+  PRECEDENCE_TABLE[precedence_n++] = p;
+}
+
+void
+precedence_table_destroy ()
+{
+  for (size_t i = 0; i < precedence_n; ++i)
+    free ((void *)PRECEDENCE_TABLE[i].key);
+}
 
 static struct precedence
 parser_query_precedence_table (struct token token)
@@ -35,9 +57,7 @@ parser_query_precedence_table (struct token token)
   if (!token_match (token, TOKEN_IDENTIFIER))
     goto invalid;
 
-  size_t size = sizeof (PRECEDENCE_TABLE) / sizeof (PRECEDENCE_TABLE[0]);
-
-  for (size_t i = 0; i < size; ++i)
+  for (size_t i = 0; i < precedence_n; ++i)
     {
       struct precedence current = PRECEDENCE_TABLE[i];
 
@@ -48,25 +68,6 @@ parser_query_precedence_table (struct token token)
 invalid:
   return (struct precedence) { 0 };
 }
-
-/*
-static int
-parser_is_delimiter (struct token token)
-{
-  switch (token.type)
-    {
-    case TOKEN_IDENTIFIER:
-      return parser_query_precedence_table (token).precedence > 0;
-    case TOKEN_NOTHING:
-    case TOKEN_SEMICOLON:
-    case TOKEN_RPAREN:
-    case TOKEN_COMMA:
-      return 1;
-    default:
-      return 0;
-    }
-}
-*/
 
 static int
 parser_match (struct parser *parser, enum token_type type)
@@ -117,243 +118,32 @@ parser_advance (struct parser *parser)
   return parser_match_error (parser);
 }
 
-struct ast *parser_parse_statement (struct parser *);
-struct ast *parser_parse_top_level_expression (struct parser *);
-struct ast *parser_parse_define (struct parser *);
-struct ast *parser_parse_extern (struct parser *);
-struct ast *parser_parse_function_prototype (struct parser *);
-struct ast *parser_parse_expression (struct parser *);
-struct ast *parser_parse_primary (struct parser *);
-struct ast *parser_parse_identifier_expression (struct parser *);
-struct ast *parser_parse_number_expression (struct parser *);
-struct ast *parser_parse_group_expression (struct parser *);
-
-struct ast *parser_parse_identifier (struct parser *);
+struct ast *parser_parse_program(struct parser *);
+struct ast *parser_parse_statement(struct parser *);
+struct ast *parser_parse_top_level_statement(struct parser *);
+struct ast *parser_parse_function_prototype(struct parser *);
+struct ast *parser_parse_expression(struct parser *);
+struct ast *parser_parse_primary(struct parser *);
+struct ast *parser_parse_identifier_expression(struct parser *);
+struct ast *parser_parse_number_expression(struct parser *);
+struct ast *parser_parse_group_expression(struct parser *);
+struct ast *parser_parse_compound_expression (struct parser *);
 
 struct ast *
-parser_parse_statement (struct parser *parser)
+parser_parse_identifier (struct parser *parser)
 {
+  if (!parser_match (parser, TOKEN_IDENTIFIER))
+    return parser_error_expect_token (parser, TOKEN_IDENTIFIER);
+
   struct ast *result;
 
-  switch (parser->current.type)
-    {
-    case TOKEN_DEFINE:
-      result = parser_parse_define (parser);
-      break;
-    case TOKEN_EXTERN:
-      result = parser_parse_extern (parser);
-      break;
-    default:
-      result = parser_parse_top_level_expression (parser);
-      break;
-    }
-
-  if (ast_match_error (result))
-    return result;
-
-  if (!parser_match (parser, TOKEN_SEMICOLON))
-    return parser_error_expect_token (parser, TOKEN_SEMICOLON);
+  result = ast_create (AST_IDENTIFIER, parser->location, parser->arena);
+  result->value.token = parser->current;
 
   if (parser_advance (parser))
     return parser_error_from_current (parser);
 
   return result;
-}
-
-struct ast *
-parser_parse_top_level_expression (struct parser *parser)
-{
-  struct ast *expression = parser_parse_expression (parser);
-
-  if (ast_match_error (expression))
-    return expression;
-
-  struct ast *prototype;
-  prototype = ast_create (AST_PROTOTYPE, parser->location, parser->arena);
-
-  struct token token = token_create (TOKEN_IDENTIFIER, parser->location);
-  token.value.s = string_copy ("__top_level_expression", parser->arena);
-
-  struct ast *identifier;
-  identifier = ast_create (AST_IDENTIFIER, parser->location, parser->arena);
-  identifier->value.token = token;
-
-  ast_append (prototype, identifier);
-
-  struct ast *function;
-  function = ast_create (AST_FUNCTION, parser->location, parser->arena);
-
-  ast_append (function, prototype);
-  ast_append (function, expression);
-
-  return function;
-}
-
-struct ast *
-parser_parse_define (struct parser *parser)
-{
-  if (!parser_match (parser, TOKEN_DEFINE))
-    return parser_error_expect_token (parser, TOKEN_DEFINE);
-
-  if (parser_advance (parser))
-    return parser_error_from_current (parser);
-
-  struct ast *prototype;
-  struct ast *expression;
-  struct ast *result;
-
-  prototype = parser_parse_function_prototype (parser);
-  if (ast_match_error (prototype))
-    return prototype;
-
-  expression = parser_parse_expression (parser);
-  if (ast_match_error (expression))
-    return expression;
-
-  result = ast_create (AST_FUNCTION, parser->location, parser->arena);
-
-  ast_append (result, prototype);
-  ast_append (result, expression);
-
-  return result;
-}
-
-struct ast *
-parser_parse_extern (struct parser *parser)
-{
-  if (!parser_match (parser, TOKEN_EXTERN))
-    return parser_error_expect_token (parser, TOKEN_EXTERN);
-
-  if (parser_advance (parser))
-    return parser_error_from_current (parser);
-
-  return parser_parse_function_prototype (parser);
-}
-
-struct ast *
-parser_parse_function_prototype (struct parser *parser)
-{
-  struct ast *name;
-  struct ast *result;
-
-  name = parser_parse_identifier(parser);
-  if (ast_match_error (name))
-    return name;
-
-  // Match '('
-  if (!parser_match (parser, TOKEN_LPAREN))
-    return parser_error_expect_token (parser, TOKEN_LPAREN);
-
-  if (parser_advance (parser))
-    return parser_error_from_current (parser);
-
-  result = ast_create (AST_PROTOTYPE, parser->location, parser->arena);
-
-  ast_append (result, name);
-
-  if (!parser_match (parser, TOKEN_RPAREN))
-    while (1)
-      {
-        struct ast *argument;
-
-        argument = parser_parse_identifier (parser);
-        if (ast_match_error (argument))
-          return argument;
-
-        ast_append (result, argument);
-
-        if (parser_match (parser, TOKEN_RPAREN))
-          break;
-
-        if (!parser_match (parser, TOKEN_COMMA))
-          return parser_error_expect_token (parser, TOKEN_COMMA);
-
-        if (parser_advance (parser))
-          return parser_error_from_current (parser);
-      }
-
-  // Match ')'
-  if (!parser_match (parser, TOKEN_RPAREN))
-    return parser_error_expect_token (parser, TOKEN_RPAREN);
-
-  if (parser_advance (parser))
-    return parser_error_from_current (parser);
-
-  return result;
-}
-
-struct ast *
-parser_parse_expression_base (struct parser *parser, int previous)
-{
-  struct ast *left;
-
-  left = parser_parse_primary (parser);
-  if (ast_match_error (left))
-    return left;
-
-  struct precedence p;
-  p = parser_query_precedence_table (parser->current);
-
-  while (p.precedence > previous)
-    {
-      struct ast *middle;
-
-      middle = parser_parse_identifier (parser);
-      if (ast_match_error (middle))
-        return middle;
-
-      struct ast *right;
-
-      right = parser_parse_expression_base (parser, p.precedence);
-      if (ast_match_error (right))
-        return right;
-
-      struct ast *t;
-      t = ast_create (AST_BINARY, parser->location, parser->arena);
-
-      ast_append (t, middle);
-      ast_append (t, left);
-      ast_append (t, right);
-
-      left = t;
-
-      p = parser_query_precedence_table (parser->current);
-    }
-
-  return left;
-
-  /*
-  struct ast *left;
-
-  left = parser_parse_primary (parser);
-  if (ast_match_error (left))
-    return left;
-
-  while (1)
-    {
-      struct precedence p;
-      p = parser_query_precedence_table (parser->current);
-
-      if (p.precedence < previous)
-        return left;
-
-      struct ast *middle;
-
-      middle = parser_parse_identifier (parser);
-      if (ast_match_error (middle))
-        return middle;
-
-
-    }
-    */
-
-  // return parser_parse_primary (parser);
-}
-
-struct ast *
-parser_parse_expression (struct parser *parser)
-{
-  return parser_parse_expression_base (parser, 0);
 }
 
 struct ast *
@@ -367,6 +157,8 @@ parser_parse_primary (struct parser *parser)
       return parser_parse_number_expression (parser);
     case TOKEN_LPAREN:
       return parser_parse_group_expression (parser);
+    case TOKEN_LBRACE:
+      return parser_parse_compound_expression (parser);
     default:
       {
         const char *b = token_type_string (parser->current.type);
@@ -374,6 +166,70 @@ parser_parse_primary (struct parser *parser)
       }
     }
 }
+
+/*
+struct ast *
+parser_parse_compound_statement (struct parser *parser)
+{
+  struct ast *expression;
+
+  expression = parser_parse_expression (parser);
+  if (ast_match_error (expression))
+    return expression;
+
+  if (!parser_match (parser, TOKEN_SEMICOLON))
+    return parser_error_expect_token (parser, TOKEN_SEMICOLON);
+
+  if (parser_advance (parser))
+    return parser_error_from_current (parser);
+
+  return expression;
+}
+*/
+
+struct ast *
+parser_parse_compound_expression (struct parser *parser)
+{
+  if (!parser_match (parser, TOKEN_LBRACE))
+    return parser_error_expect_token (parser, TOKEN_LBRACE);
+
+  if (parser_advance (parser))
+    return parser_error_from_current (parser);
+
+  struct ast *result;
+
+  result = ast_create (AST_COMPOUND, parser->location, parser->arena);
+
+  // Minimum of 1 expression must be inside compound.
+  while (1)
+    {
+      struct ast *expression;
+
+      expression = parser_parse_expression (parser);
+      if (ast_match_error (expression))
+        return expression;
+
+      ast_append (result, expression);
+
+      if (parser_match (parser, TOKEN_RBRACE))
+        break;
+
+      if (!parser_match (parser, TOKEN_SEMICOLON))
+        return parser_error_expect_token (parser, TOKEN_RBRACE);
+
+      if (parser_advance (parser))
+        return parser_error_from_current (parser);
+    }
+
+  if (!parser_match (parser, TOKEN_RBRACE))
+    return parser_error_expect_token (parser, TOKEN_RBRACE);
+
+  if (parser_advance (parser))
+    return parser_error_from_current (parser);
+
+  return result;
+}
+
 
 struct ast *
 parser_parse_identifier_expression (struct parser *parser)
@@ -411,7 +267,7 @@ parser_parse_identifier_expression (struct parser *parser)
           break;
 
         if (!parser_match (parser, TOKEN_COMMA))
-          return parser_error_expect_token (parser, TOKEN_COMMA);
+          return parser_error_expect_token (parser, TOKEN_RPAREN);
 
         if (parser_advance (parser))
           return parser_error_from_current (parser);
@@ -468,15 +324,184 @@ parser_parse_group_expression (struct parser *parser)
 }
 
 struct ast *
-parser_parse_identifier (struct parser *parser)
+parser_parse_expression_base (struct parser *parser, double previous)
 {
-  if (!parser_match (parser, TOKEN_IDENTIFIER))
-    return parser_error_expect_token (parser, TOKEN_IDENTIFIER);
+  struct ast *left;
+
+  left = parser_parse_primary (parser);
+  if (ast_match_error (left))
+    return left;
+
+  struct precedence p;
+  p = parser_query_precedence_table (parser->current);
+
+  while (p.precedence > previous)
+    {
+      struct ast *middle;
+
+      middle = parser_parse_identifier (parser);
+      if (ast_match_error (middle))
+        return middle;
+
+      struct ast *right;
+
+      right = parser_parse_expression_base (parser, p.precedence);
+      if (ast_match_error (right))
+        return right;
+
+      struct ast *t;
+      t = ast_create (AST_BINARY, parser->location, parser->arena);
+
+      ast_append (t, middle);
+      ast_append (t, left);
+      ast_append (t, right);
+
+      left = t;
+
+      p = parser_query_precedence_table (parser->current);
+    }
+
+  return left;
+}
+
+struct ast *
+parser_parse_expression (struct parser *parser)
+{
+  return parser_parse_expression_base (parser, 0.0);
+}
+
+struct ast *
+parser_parse_function_prototype(struct parser *parser)
+{
+  struct ast *name;
+  struct ast *result;
+
+  int is_operator = 0;
+  double precedence = 1.0;
+
+  name = parser_parse_identifier (parser);
+  if (ast_match_error (name))
+    return name;
+
+  if (parser_match (parser, TOKEN_NUMBER))
+    {
+      is_operator = 1;
+      precedence = parser->current.value.f;
+
+      if (parser_advance (parser))
+        return parser_error_from_current (parser);
+    }
+
+  if (!parser_match (parser, TOKEN_LPAREN))
+    return parser_error_expect_token (parser, TOKEN_LPAREN);
+
+  if (parser_advance (parser))
+    return parser_error_from_current (parser);
+
+  result = ast_create (AST_PROTOTYPE, parser->location, parser->arena);
+
+  ast_append (result, name);
+
+  size_t n_arg = 0;
+  int variadic = 0;
+
+  if (!parser_match (parser, TOKEN_RPAREN))
+    while (1)
+      {
+        if (parser_match (parser, TOKEN_3DOT))
+          {
+            variadic = 1;
+
+            if (parser_advance (parser))
+              return parser_error_from_current (parser);
+
+            break;
+          }
+
+        struct ast *argument;
+
+        argument = parser_parse_identifier (parser);
+        if (ast_match_error (argument))
+          return argument;
+
+        ast_append (result, argument);
+        n_arg++;
+
+        if (parser_match (parser, TOKEN_RPAREN))
+          break;
+
+        if (!parser_match (parser, TOKEN_COMMA))
+          // Expect TOKEN_RPAREN for better message.
+          return parser_error_expect_token (parser, TOKEN_RPAREN);
+
+        if (parser_advance (parser))
+          return parser_error_from_current (parser);
+      }
+
+  if (!parser_match (parser, TOKEN_RPAREN))
+    return parser_error_expect_token (parser, TOKEN_RPAREN);
+
+  if (parser_advance (parser))
+    return parser_error_from_current (parser);
+
+  if (is_operator)
+    {
+      if (n_arg != 2 || variadic)
+        {
+          struct error e
+              = error_create ("binary-operator expects two parameters");
+          return ast_create_e (e, name->location, parser->arena);
+        }
+
+      precedence_table_add (name->value.token.value.s, precedence);
+    }
+
+  result->state = variadic;
+  return result;
+}
+
+struct ast *
+parser_parse_top_level_statement(struct parser *parser)
+{
+  struct ast *proto;
+
+  proto = parser_parse_function_prototype (parser);
+  if (ast_match_error (proto))
+    return proto;
+
+  if (!parser_match (parser, TOKEN_EQUAL))
+    return proto;
+
+  if (parser_advance (parser))
+    return parser_error_from_current (parser);
+
+  struct ast *expression;
+
+  expression = parser_parse_expression (parser);
+  if (ast_match_error (expression))
+    return expression;
 
   struct ast *result;
 
-  result = ast_create (AST_IDENTIFIER, parser->location, parser->arena);
-  result->value.token = parser->current;
+  result = ast_create (AST_FUNCTION, parser->location, parser->arena);
+
+  ast_append (result, proto);
+  ast_append (result, expression);
+
+  return result;
+}
+
+struct ast *
+parser_parse_statement(struct parser *parser)
+{
+  struct ast *result;
+
+  result = parser_parse_top_level_statement (parser);
+  if (ast_match_error (result))
+    return result;
+
+  if (!parser_match (parser, TOKEN_SEMICOLON))
+    return parser_error_expect_token (parser, TOKEN_SEMICOLON);
 
   if (parser_advance (parser))
     return parser_error_from_current (parser);
@@ -485,7 +510,7 @@ parser_parse_identifier (struct parser *parser)
 }
 
 struct ast *
-parser_parse_program (struct parser *parser)
+parser_parse_program(struct parser *parser)
 {
   struct ast *result;
 
@@ -516,11 +541,11 @@ parser_parse (struct parser *parser)
   if (parser_advance (parser))
     return parser_error_from_current (parser);
 
-  struct ast *statement;
+  struct ast *result;
 
-  statement = parser_parse_program (parser);
-  if (ast_match_error (statement))
-    return statement;
+  result = parser_parse_program (parser);
+  if (ast_match_error (result))
+    return result;
 
   if (!parser_match (parser, TOKEN_NOTHING))
     return parser_error_expect_token (parser, TOKEN_NOTHING);
@@ -528,6 +553,6 @@ parser_parse (struct parser *parser)
   if (parser_advance (parser))
     return parser_error_from_current (parser);
 
-  return statement;
+  return result;
 }
 

@@ -11,10 +11,13 @@ static const char *const TOKEN_TYPE_STRING[] = {
   "number",
   "(",
   ")",
+  "{",
+  "}",
   "=",
   ",",
-  "define",
-  "extern"
+  "...",
+  // "define",
+  // "extern"
 };
 
 const char *

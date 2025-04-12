@@ -14,5 +14,8 @@ struct parser
 struct parser parser_create (struct lexer *lexer, struct arena *);
 struct ast *parser_parse (struct parser *);
 
+void precedence_table_add (const char *key, double precedence);
+void precedence_table_destroy ();
+
 #endif // PARSER_H
 

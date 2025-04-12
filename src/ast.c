@@ -7,6 +7,7 @@ static const char *const AST_TYPE_STRING[] = {
   "identifier",
   "number",
   "binary",
+  "compound",
   "call",
   "prototype",
   "function",

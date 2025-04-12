@@ -37,9 +37,26 @@ read_file (const char *filename)
 #include <llvm-c/TargetMachine.h>
 #include <llvm-c/Analysis.h>
 
+#include <llvm-c/Transforms/Scalar.h>
+#include <llvm-c/Transforms/PassManagerBuilder.h>
+#include <llvm-c//Transforms/Utils.h>
+
+int optimize_function = 0;
+int has_error = 0;
+
 LLVMContextRef context;
 LLVMModuleRef module;
 LLVMBuilderRef builder;
+
+LLVMValueRef
+generate_error (struct location location, const char *fmt)
+{
+  location_debug_print (location);
+  printf (": fatal-error: %s [SYNTAX]\n", fmt);
+
+  has_error = 1;
+  return NULL;
+}
 
 typedef struct NamedValue {
   char *name;
@@ -86,10 +103,7 @@ generate_identifier (struct ast *node)
   const char *name = node->value.token.value.s;
   LLVMValueRef value = lookupNamedValue (name);
   if (!value)
-    {
-      printf ("undefined variable '%s'\n", name);
-      return NULL;
-    }
+    return generate_error (node->location, "undefined-variable");
 
   return value;
 }
@@ -124,8 +138,35 @@ generate_binary (struct ast *node)
   if (strcmp (operator, "/") == 0)
     return LLVMBuildFDiv (builder, left, right, "");
 
-  fprintf (stderr, "invalid binary operation '%s'\n", operator);
-  abort ();
+  LLVMValueRef function = LLVMGetNamedFunction (module, operator);
+  if (!function)
+    return generate_error (node->location, "undefined operator-function");
+
+  LLVMValueRef arguments[2] = { left, right };
+
+  LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(function));
+
+  LLVMValueRef call = LLVMBuildCall2 (builder, type, function, arguments, 2,
+                                      "");
+  return call;
+}
+
+LLVMValueRef
+generate_compound (struct ast *node)
+{
+  struct ast *current = node->child;
+  LLVMValueRef result;
+
+  while (current)
+    {
+      result = generate (current);
+      if (result == NULL)
+        return NULL;
+
+      current = current->next;
+    }
+
+  return result;
 }
 
 LLVMValueRef
@@ -139,6 +180,9 @@ generate_call (struct ast *node)
       return NULL;
     }
 
+  LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(function));
+  int variadic = LLVMIsFunctionVarArg (type);
+
   struct ast *current;
   size_t n = 0;
 
@@ -146,11 +190,13 @@ generate_call (struct ast *node)
   while (current->next)
     current = current->next, ++n;
 
-  if (LLVMCountParams (function) != n)
-    {
-      printf ("argument # mismatch\n");
-      return NULL;
-    }
+  size_t params = LLVMCountParams (function);
+  if ((!variadic && n != params) || (variadic && n < params))
+    return generate_error (node->location, "argument # mismatch");
+    // {
+    //   fprintf (stderr, "\n");
+    //   return NULL;
+    // }
 
   LLVMValueRef arguments[n];
 
@@ -163,8 +209,6 @@ generate_call (struct ast *node)
 
       current = current->next;
     }
-
-  LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(function));
 
   LLVMValueRef call = LLVMBuildCall2 (builder, type, function, arguments, n,
                                       "");
@@ -188,7 +232,7 @@ generate_prototype (struct ast *node)
     arguments[i] = LLVMDoubleTypeInContext (context);
 
   LLVMTypeRef type = LLVMFunctionType (LLVMDoubleTypeInContext (context),
-                                       arguments, n, 0);
+                                       arguments, n, node->state);
 
   LLVMValueRef function = LLVMAddFunction(module, name, type);
 
@@ -230,6 +274,22 @@ generate_function (struct ast *node)
   if (returnV)
     {
       LLVMBuildRet (builder, returnV);
+
+      if (optimize_function)
+        {
+          LLVMPassManagerRef function_pass_manager = LLVMCreateFunctionPassManagerForModule(module);
+          LLVMAddBasicAliasAnalysisPass(function_pass_manager);
+          LLVMAddPromoteMemoryToRegisterPass(function_pass_manager);
+          LLVMAddInstructionCombiningPass(function_pass_manager);
+          LLVMAddReassociatePass(function_pass_manager);
+          LLVMAddGVNPass(function_pass_manager);
+          LLVMAddCFGSimplificationPass(function_pass_manager);
+          LLVMInitializeFunctionPassManager(function_pass_manager);
+          LLVMRunFunctionPassManager(function_pass_manager, function);
+          LLVMFinalizeFunctionPassManager(function_pass_manager);
+          LLVMDisposePassManager(function_pass_manager);
+        }
+
       return function;
     }
 
@@ -266,6 +326,8 @@ generate (struct ast *node)
       return generate_number (node);
     case AST_BINARY:
       return generate_binary (node);
+    case AST_COMPOUND:
+      return generate_compound (node);
     case AST_CALL:
       return generate_call (node);
     case AST_PROTOTYPE:
@@ -282,11 +344,16 @@ main (int argc, char *argv[])
 {
   (void)argc, (void)argv;
 
-  if (argc != 2)
+  if (argc < 2)
     {
       printf ("Usage: %s <file>\n", argv[0]);
       abort ();
     }
+
+  precedence_table_add ("+", 20);
+  precedence_table_add ("-", 20);
+  precedence_table_add ("*", 30);
+  precedence_table_add ("/", 30);
 
   char path_copy[PATH_MAX];
   char dir_copy[PATH_MAX];
@@ -316,6 +383,12 @@ main (int argc, char *argv[])
   char ll_file[PATH_MAX];
   if ((unsigned)snprintf(o_file, sizeof(o_file), "%s/%s.o", dir, base) >= sizeof(o_file) ||
       (unsigned)snprintf(ll_file, sizeof(ll_file), "%s/%s.ll", dir, base) >= sizeof(ll_file)) {
+      fprintf(stderr, "Path too long.\n");
+      return 1;
+  }
+
+  char s_file[PATH_MAX];
+  if ((unsigned)snprintf(s_file, sizeof(s_file), "%s/%s.s", dir, base) >= sizeof(s_file)) {
       fprintf(stderr, "Path too long.\n");
       return 1;
   }
@@ -350,8 +423,9 @@ main (int argc, char *argv[])
   // else
   //   ast_debug_print (ast, 0);
 
-  LLVMValueRef v = generate (ast);
-  (void)v;
+  (void)generate (ast);
+  if (has_error)
+    exit (1);
 
   arena_destroy (&lexer_arena);
   arena_destroy (&parser_arena);
@@ -417,6 +491,17 @@ main (int argc, char *argv[])
       exit(1);
   }
 
+  if (LLVMTargetMachineEmitToFile(
+        target_machine,
+        module,
+        s_file,
+        LLVMAssemblyFile,
+        &error) != 0) {
+    fprintf(stderr, "Error emitting assembly file: %s\n", error);
+    LLVMDisposeMessage(error);
+    exit(1);
+  }
+
   // Clean up
   LLVMDisposeTargetMachine(target_machine);
   LLVMDisposeMessage(triple);
@@ -426,7 +511,7 @@ main (int argc, char *argv[])
   LLVMDisposeModule (module);
   LLVMContextDispose (context);
 
-  printf ("%s, %s\n", ll_file, o_file);
+  precedence_table_destroy ();
 
   return 0;
 }

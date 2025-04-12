@@ -1,9 +1,12 @@
 
-define avarage(a, b)
-  (a + b) / 2;
+putd(a);
+putds(a, ...);
+sqrt(a);
 
-extern sqrt(a);
+Main() = {
+  putds(3, 1, 2, 3);
 
-define c_side(a, b)
-  sqrt(a * a + b * b);
+  0
+};
+
 
