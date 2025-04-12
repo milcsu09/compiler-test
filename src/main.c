@@ -32,16 +32,16 @@ read_file (const char *filename)
 }
 
 #include <llvm-c/Core.h>
-#include <llvm-c/Core.h>
+#include <llvm-c/ExecutionEngine.h>
 #include <llvm-c/Target.h>
-#include <llvm-c/TargetMachine.h>
 #include <llvm-c/Analysis.h>
+#include <llvm-c/Support.h>
 
 #include <llvm-c/Transforms/Scalar.h>
 #include <llvm-c/Transforms/PassManagerBuilder.h>
 #include <llvm-c//Transforms/Utils.h>
 
-int optimize_function = 0;
+int optimize_function = 1;
 int has_error = 0;
 
 LLVMContextRef context;
@@ -118,6 +118,8 @@ generate_number (struct ast *node)
 LLVMValueRef
 generate_binary (struct ast *node)
 {
+  LLVMTypeRef type = LLVMDoubleTypeInContext (context);
+
   LLVMValueRef left = generate (node->child->next);
   LLVMValueRef right = generate (node->child->next->next);
 
@@ -138,17 +140,89 @@ generate_binary (struct ast *node)
   if (strcmp (operator, "/") == 0)
     return LLVMBuildFDiv (builder, left, right, "");
 
+  if (strcmp (operator, "<") == 0)
+    {
+      LLVMValueRef cmp = LLVMBuildFCmp (builder, LLVMRealOLT, left, right, "");
+      return LLVMBuildUIToFP (builder, cmp, type, "");
+    }
+
+  if (strcmp (operator, ">") == 0)
+    {
+      LLVMValueRef cmp = LLVMBuildFCmp (builder, LLVMRealOGT, left, right, "");
+      return LLVMBuildUIToFP (builder, cmp, type, "");
+    }
+
+  if (strcmp (operator, "<=") == 0)
+    {
+      LLVMValueRef cmp = LLVMBuildFCmp (builder, LLVMRealOLE, left, right, "");
+      return LLVMBuildUIToFP (builder, cmp, type, "");
+    }
+
+  if (strcmp (operator, ">=") == 0)
+    {
+      LLVMValueRef cmp = LLVMBuildFCmp (builder, LLVMRealOGE, left, right, "");
+      return LLVMBuildUIToFP (builder, cmp, type, "");
+    }
+
   LLVMValueRef function = LLVMGetNamedFunction (module, operator);
   if (!function)
     return generate_error (node->location, "undefined operator-function");
 
   LLVMValueRef arguments[2] = { left, right };
 
-  LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(function));
+  LLVMTypeRef function_type = LLVMGetElementType(LLVMTypeOf(function));
 
-  LLVMValueRef call = LLVMBuildCall2 (builder, type, function, arguments, 2,
-                                      "");
+  LLVMValueRef call = LLVMBuildCall2 (builder, function_type, function,
+                                      arguments, 2, "");
   return call;
+}
+
+LLVMValueRef
+generate_conditional (struct ast *node)
+{
+  LLVMValueRef cond_v = generate (node->child);
+  if (!cond_v)
+    return NULL;
+
+  LLVMTypeRef type = LLVMDoubleTypeInContext (context);
+  LLVMValueRef zero = LLVMConstReal (type, 0.0);
+
+  cond_v = LLVMBuildFCmp (builder, LLVMRealONE, cond_v, zero, "cond");
+
+  LLVMBasicBlockRef current_bb = LLVMGetInsertBlock (builder);
+  LLVMValueRef function = LLVMGetBasicBlockParent (current_bb);
+
+  LLVMBasicBlockRef then_bb  = LLVMAppendBasicBlockInContext (context, function, "");
+  LLVMBasicBlockRef else_bb  = LLVMAppendBasicBlockInContext (context, function, "");
+  LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext (context, function, "");
+
+  LLVMBuildCondBr (builder, cond_v, then_bb, else_bb);
+
+  LLVMPositionBuilderAtEnd (builder, then_bb);
+  LLVMValueRef then_v = generate (node->child->next);
+  if (!then_v)
+    return NULL;
+
+  LLVMBuildBr (builder, merge_bb);
+  then_bb = LLVMGetInsertBlock (builder);
+
+  LLVMPositionBuilderAtEnd (builder, else_bb);
+  LLVMValueRef else_v = generate (node->child->next->next);
+  if (!else_v)
+    return NULL;
+
+  LLVMBuildBr (builder, merge_bb);
+  else_bb = LLVMGetInsertBlock (builder);
+
+  LLVMPositionBuilderAtEnd (builder, merge_bb);
+
+  LLVMValueRef phi = LLVMBuildPhi (builder, type, "");
+
+  LLVMValueRef in_v[2] = { then_v, else_v };
+  LLVMBasicBlockRef in_bb[2] = { then_bb, else_bb };
+  LLVMAddIncoming (phi, in_v, in_bb, 2);
+
+  return phi;
 }
 
 LLVMValueRef
@@ -176,8 +250,9 @@ generate_call (struct ast *node)
   LLVMValueRef function = LLVMGetNamedFunction (module, name);
   if (!function)
     {
-      printf ("undefined function '%s'\n", name);
-      return NULL;
+      return generate_error (node->location, "undefined-function");
+      // printf ("undefined function '%s'\n", name);
+      // return NULL;
     }
 
   LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(function));
@@ -326,6 +401,8 @@ generate (struct ast *node)
       return generate_number (node);
     case AST_BINARY:
       return generate_binary (node);
+    case AST_CONDITIONAL:
+      return generate_conditional (node);
     case AST_COMPOUND:
       return generate_compound (node);
     case AST_CALL:
@@ -350,10 +427,22 @@ main (int argc, char *argv[])
       abort ();
     }
 
-  precedence_table_add ("+", 20);
-  precedence_table_add ("-", 20);
-  precedence_table_add ("*", 30);
-  precedence_table_add ("/", 30);
+  // 1 < 2 || 2 > 3
+  // 1 < 2 || 2 > 3 && 2 < 3
+
+  // 1 && 2 == 3
+
+  precedence_table_add ("<", 80);
+  precedence_table_add (">", 80);
+  precedence_table_add ("<=", 80);
+  precedence_table_add (">=", 80);
+
+  precedence_table_add ("+", 90);
+  precedence_table_add ("-", 90);
+
+  precedence_table_add ("*", 100);
+  precedence_table_add ("/", 100);
+
 
   char path_copy[PATH_MAX];
   char dir_copy[PATH_MAX];
@@ -512,6 +601,8 @@ main (int argc, char *argv[])
   LLVMContextDispose (context);
 
   precedence_table_destroy ();
+
+  printf ("3 files generated: %s, %s, %s\n", ll_file, s_file, o_file);
 
   return 0;
 }

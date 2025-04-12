@@ -27,6 +27,9 @@ enum token_type
   TOKEN_EQUAL,
   TOKEN_COMMA,
   TOKEN_3DOT,
+  TOKEN_IF,
+  TOKEN_THEN,
+  TOKEN_ELSE,
   // TOKEN_DEFINE,
   // TOKEN_EXTERN
 };

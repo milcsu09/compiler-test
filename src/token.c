@@ -16,6 +16,9 @@ static const char *const TOKEN_TYPE_STRING[] = {
   "=",
   ",",
   "...",
+  "if-keyword",
+  "then-keyword",
+  "else-keyword",
   // "define",
   // "extern"
 };

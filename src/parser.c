@@ -128,6 +128,7 @@ struct ast *parser_parse_identifier_expression(struct parser *);
 struct ast *parser_parse_number_expression(struct parser *);
 struct ast *parser_parse_group_expression(struct parser *);
 struct ast *parser_parse_compound_expression (struct parser *);
+struct ast *parser_parse_conditional_expression (struct parser *);
 
 struct ast *
 parser_parse_identifier (struct parser *parser)
@@ -159,6 +160,8 @@ parser_parse_primary (struct parser *parser)
       return parser_parse_group_expression (parser);
     case TOKEN_LBRACE:
       return parser_parse_compound_expression (parser);
+    case TOKEN_IF:
+      return parser_parse_conditional_expression (parser);
     default:
       {
         const char *b = token_type_string (parser->current.type);
@@ -167,25 +170,52 @@ parser_parse_primary (struct parser *parser)
     }
 }
 
-/*
 struct ast *
-parser_parse_compound_statement (struct parser *parser)
+parser_parse_conditional_expression (struct parser *parser)
 {
-  struct ast *expression;
-
-  expression = parser_parse_expression (parser);
-  if (ast_match_error (expression))
-    return expression;
-
-  if (!parser_match (parser, TOKEN_SEMICOLON))
-    return parser_error_expect_token (parser, TOKEN_SEMICOLON);
+  if (!parser_match (parser, TOKEN_IF))
+    return parser_error_expect_token (parser, TOKEN_IF);
 
   if (parser_advance (parser))
     return parser_error_from_current (parser);
 
-  return expression;
+  struct ast *cond_node;
+  struct ast *then_node;
+  struct ast *else_node;
+  struct ast *result;
+
+  cond_node = parser_parse_expression (parser);
+  if (ast_match_error (cond_node))
+    return cond_node;
+
+  if (!parser_match (parser, TOKEN_THEN))
+    return parser_error_expect_token (parser, TOKEN_THEN);
+
+  if (parser_advance (parser))
+    return parser_error_from_current (parser);
+
+  then_node = parser_parse_expression (parser);
+  if (ast_match_error (then_node))
+    return then_node;
+
+  if (!parser_match (parser, TOKEN_ELSE))
+    return parser_error_expect_token (parser, TOKEN_ELSE);
+
+  if (parser_advance (parser))
+    return parser_error_from_current (parser);
+
+  else_node = parser_parse_expression (parser);
+  if (ast_match_error (else_node))
+    return else_node;
+
+  result = ast_create (AST_CONDITIONAL, parser->location, parser->arena);
+
+  ast_append (result, cond_node);
+  ast_append (result, then_node);
+  ast_append (result, else_node);
+
+  return result;
 }
-*/
 
 struct ast *
 parser_parse_compound_expression (struct parser *parser)

@@ -67,7 +67,7 @@ lexer_advance_token_n (struct lexer *lexer, size_t n, size_t type)
   return token;
 }
 
-static struct token
+struct token
 lexer_advance_identifier_n (struct lexer *lexer, size_t n)
 {
   struct token token;
@@ -182,9 +182,31 @@ lexer_lex_identifier (struct lexer *lexer)
   // if (strncmp (start, "extern", 6) == 0)
   //   return token_create (TOKEN_EXTERN, location);
 
+  if (strncmp (start, "if", 2) == 0)
+    return token_create (TOKEN_IF, location);
+  if (strncmp (start, "then", 4) == 0)
+    return token_create (TOKEN_THEN, location);
+  if (strncmp (start, "else", 4) == 0)
+    return token_create (TOKEN_ELSE, location);
+
   char *s = string_copy_until (start, lexer->current, lexer->arena);
 
   return token_create_s (s, TOKEN_IDENTIFIER, location);
+}
+
+static int
+lexer_valid_punct (char c)
+{
+  switch (c)
+    {
+    case '(':
+    case ')':
+    case '{':
+    case '}':
+      return 0;
+    default:
+      return ispunct (c);
+    }
 }
 
 static struct token
@@ -193,7 +215,7 @@ lexer_lex_operator (struct lexer *lexer)
   struct location location = lexer->location;
   const char *start = lexer->current;
 
-  while (ispunct (*lexer->current))
+  while (lexer_valid_punct (*lexer->current))
     lexer_advance (lexer);
 
   char *s = string_copy_until (start, lexer->current, lexer->arena);
@@ -234,6 +256,20 @@ lexer_next (struct lexer *lexer)
       return lexer_advance_token (lexer, TOKEN_LBRACE);
     case '}':
       return lexer_advance_token (lexer, TOKEN_RBRACE);
+    case ',':
+      return lexer_advance_token (lexer, TOKEN_COMMA);
+
+    case '=':
+      if (!lexer_valid_punct (*(lexer->current + 1)))
+        return lexer_advance_token (lexer, TOKEN_EQUAL);
+      break;
+
+    case '.':
+      if (lexer_match (lexer, "..."))
+        return lexer_advance_token_n (lexer, 3, TOKEN_3DOT);
+      break;
+
+    /*
     case '=':
       return lexer_advance_token (lexer, TOKEN_EQUAL);
     case ',':
@@ -252,8 +288,15 @@ lexer_next (struct lexer *lexer)
       return lexer_advance_identifier_n (lexer, 1);
     case '*':
       return lexer_advance_identifier_n (lexer, 1);
-    case '%':
+    case '<':
+      if (lexer_match (lexer, "<="))
+        return lexer_advance_identifier_n (lexer, 2);
       return lexer_advance_identifier_n (lexer, 1);
+    case '>':
+      if (lexer_match (lexer, ">="))
+        return lexer_advance_identifier_n (lexer, 2);
+      return lexer_advance_identifier_n (lexer, 1);
+    */
     case '\0':
       return token_create (TOKEN_NOTHING, lexer->location);
     }
