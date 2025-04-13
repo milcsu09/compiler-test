@@ -1,13 +1,12 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-extern double Main ();
+extern void Main ();
 
-double
+void
 putd (double a)
 {
   printf ("%g\n", a);
-  return 0.0;
 }
 
 void
@@ -21,6 +20,7 @@ separator()
 int
 main (void)
 {
-  return (int) Main ();
+  Main ();
+  return 0;
 }
 

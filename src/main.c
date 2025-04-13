@@ -47,6 +47,7 @@ int has_error = 0;
 LLVMContextRef context;
 LLVMModuleRef module;
 LLVMBuilderRef builder;
+LLVMPassManagerRef pass_manager;
 
 LLVMValueRef
 generate_error (struct location location, const char *fmt)
@@ -186,12 +187,8 @@ create_entry_alloca(LLVMValueRef function, const char *name, LLVMTypeRef type)
   LLVMBasicBlockRef entry = LLVMGetEntryBasicBlock(function);
   LLVMValueRef first_instr = LLVMGetFirstInstruction(entry);
 
-  // Save current builder position
   LLVMBasicBlockRef curr_bb = LLVMGetInsertBlock(builder);
-  // LLVMGetFirstInstruction ()
-  // LLVMValueRef curr_instr = LLVMGetInstruction(builder);
 
-  // Temporarily move builder to insert before first instruction in entry block
   if (first_instr)
     LLVMPositionBuilderBefore(builder, first_instr);
   else
@@ -199,15 +196,12 @@ create_entry_alloca(LLVMValueRef function, const char *name, LLVMTypeRef type)
 
   LLVMValueRef alloca = LLVMBuildAlloca(builder, type, name);
 
-  // Restore builder position
-  // if (curr_instr)
-  //   LLVMPositionBuilderBefore(builder, curr_instr);
-  // else
   LLVMPositionBuilderAtEnd(builder, curr_bb);
 
   return alloca;
 }
 
+/*
 LLVMValueRef
 create_entry_alloca2 (LLVMValueRef function, const char *name, LLVMTypeRef type)
 {
@@ -223,6 +217,7 @@ create_entry_alloca2 (LLVMValueRef function, const char *name, LLVMTypeRef type)
 
   return allocaInst;
 }
+*/
 
 LLVMValueRef generate (struct ast *node, struct scope *scope);
 
@@ -300,7 +295,8 @@ generate_binary (struct ast *node, struct scope *scope)
       LLVMValueRef var = symbol->value.value;
 
       LLVMValueRef right = generate (node->child->next->next, scope);
-      return LLVMBuildStore (builder, right, var);
+      LLVMBuildStore (builder, right, var);
+      return right;
     }
 
   LLVMValueRef left = generate (node->child->next, scope);
@@ -383,12 +379,28 @@ generate_conditional (struct ast *node, struct scope *scope)
   falseBlock = LLVMGetInsertBlock (builder);
 
   LLVMPositionBuilderAtEnd(builder, mergeBlock);
+  if (LLVMGetTypeKind(result_type) == LLVMVoidTypeKind)
+    {
+      return NULL;
+    }
+  else
+    {
+      LLVMValueRef phi = LLVMBuildPhi(builder, result_type, "iftmp");
+      LLVMAddIncoming(phi, &valTrue, &trueBlock, 1);
+      LLVMAddIncoming(phi, &valFalse, &falseBlock, 1);
+      return phi;
+    }
+
+
+  /*
+  LLVMPositionBuilderAtEnd(builder, mergeBlock);
   LLVMValueRef phi = LLVMBuildPhi(builder, result_type, "iftmp");
 
   LLVMAddIncoming(phi, &valTrue, &trueBlock, 1);
   LLVMAddIncoming(phi, &valFalse, &falseBlock, 1);
 
   return phi;
+  */
 }
 
 LLVMValueRef
@@ -403,15 +415,44 @@ generate_compound (struct ast *node, struct scope *scope)
   while (current)
     {
       result = generate (current, child);
-      if (result == NULL)
-        return NULL;
-
       current = current->next;
     }
 
   scope_destroy (child);
 
   return result;
+}
+
+LLVMValueRef
+generate_while (struct ast *node, struct scope *scope)
+{
+  LLVMBasicBlockRef current_bb = LLVMGetInsertBlock (builder);
+  LLVMValueRef fn = LLVMGetBasicBlockParent (current_bb);
+
+  LLVMBasicBlockRef condBlock = LLVMAppendBasicBlock (fn, "while.cond");
+  LLVMBasicBlockRef bodyBlock = LLVMAppendBasicBlock (fn, "while.body");
+  LLVMBasicBlockRef endBlock  = LLVMAppendBasicBlock (fn, "while.end");
+
+  LLVMBuildBr (builder, condBlock);
+
+  LLVMPositionBuilderAtEnd (builder, condBlock);
+  LLVMValueRef condVal = generate (node->child, scope);
+  if (!condVal)
+    return NULL;
+
+  LLVMBuildCondBr (builder, condVal, bodyBlock, endBlock);
+
+  LLVMPositionBuilderAtEnd (builder, bodyBlock);
+  LLVMValueRef bodyVal = generate (node->child->next, scope);
+  if (!bodyVal)
+    return NULL;
+
+  LLVMBuildBr(builder, condBlock);
+  bodyBlock = LLVMGetInsertBlock(builder);
+
+  LLVMPositionBuilderAtEnd (builder, endBlock);
+
+  return LLVMConstNull(LLVMDoubleType());
 }
 
 LLVMValueRef
@@ -543,17 +584,6 @@ generate_function (struct ast *node, struct scope *scope)
                                                         "entry");
   LLVMPositionBuilderAtEnd (builder, bb);
 
-  // for (auto &Arg : TheFunction->args()) {
-  //   // Create an alloca for this variable.
-  //   AllocaInst *Alloca = CreateEntryBlockAlloca(TheFunction, Arg.getName());
-
-  //   // Store the initial value into the alloca.
-  //   Builder->CreateStore(&Arg, Alloca);
-
-  //   // Add arguments to variable symbol table.
-  //   NamedValues[std::string(Arg.getName())] = Alloca;
-  // }
-
   size_t n = 0;
 
   scope_clear (scope);
@@ -581,6 +611,8 @@ generate_function (struct ast *node, struct scope *scope)
   else
     LLVMBuildRetVoid (builder);
 
+  LLVMRunFunctionPassManager(pass_manager, function);
+
   return function;
 }
 
@@ -591,9 +623,7 @@ generate_program (struct ast *node, struct scope *scope)
 
   while (current != NULL)
     {
-      if (generate (current, scope) == NULL)
-        return NULL;
-
+      generate (current, scope);
       current = current->next;
     }
 
@@ -619,6 +649,8 @@ generate (struct ast *node, struct scope *scope)
       return generate_conditional (node, scope);
     case AST_COMPOUND:
       return generate_compound (node, scope);
+    case AST_WHILE:
+      return generate_while (node, scope);
     case AST_DECLARATION:
       return generate_declaration (node, scope);
     case AST_CALL:
@@ -829,22 +861,35 @@ ast_type_check (struct ast *ast, struct arena *arena, struct scope *fs,
         ast->expr_type = type;
 
         scope_destroy (child);
+        if (ast->state == 1)
+          return type_create (TYPE_VOID, arena);
         return type;
+      }
+      break;
+    case AST_WHILE:
+      {
+        struct type *cond = ast_type_check (ast->child, arena, fs, vs);
+        ast_type_match (cond->kind, TYPE_BOOL, ast->child->location);
+        (void)ast_type_check (ast->child->next, arena, fs, vs);
+        return cond;
       }
       break;
     case AST_DECLARATION:
       {
-        struct type *right = ast_type_check (ast->child->next, arena, fs, vs);
-        ast_type_match (right->kind, ast->expr_type->kind, ast->location);
+        if (ast->child->next)
+          {
+            struct type *right = ast_type_check (ast->child->next, arena, fs, vs);
+            ast_type_match (right->kind, ast->expr_type->kind, ast->location);
+          }
 
         struct symbol *symbol;
 
         symbol = symbol_create (SYMBOL_TYPE, ast->child->value.token.value.s);
-        symbol->value.type = right;
+        symbol->value.type = ast->expr_type;
 
         scope_add (vs, symbol);
 
-        return right;
+        return ast->expr_type;
       }
       break;
     case AST_CALL:
@@ -1088,6 +1133,10 @@ main (int argc, char *argv[])
   context = LLVMContextCreate ();
   module = LLVMModuleCreateWithNameInContext ("Main", context);
   builder = LLVMCreateBuilderInContext (context);
+
+  pass_manager = LLVMCreateFunctionPassManagerForModule(module);
+  LLVMAddPromoteMemoryToRegisterPass (pass_manager);  // mem2reg
+  LLVMInitializeFunctionPassManager (pass_manager);
 
   char *buffer = read_file (argv[1]);
 

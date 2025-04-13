@@ -125,6 +125,7 @@ struct ast *parser_parse_group_expression(struct parser *);
 struct ast *parser_parse_compound_expression (struct parser *);
 struct ast *parser_parse_conditional_expression (struct parser *);
 
+struct ast *parser_parse_while (struct parser *);
 struct ast *parser_parse_declaration_expression (struct parser *);
 
 // TODO: HANDLE ERRORS!
@@ -340,26 +341,36 @@ parser_parse_compound_expression (struct parser *parser)
 
   result = ast_create (AST_COMPOUND, parser->location, parser->arena);
 
-  // Minimum of 1 expression must be inside compound.
-  while (1)
-    {
-      struct ast *expression;
+  int void_ = 0;
 
-      expression = parser_parse_declaration_expression (parser);
-      if (ast_match_error (expression))
-        return expression;
+  if (parser_match (parser, TOKEN_RBRACE))
+    void_ = 1;
+  else
+    while (1)
+      {
+        if (parser_match (parser, TOKEN_RBRACE))
+          {
+            void_ = 1;
+            break;
+          }
 
-      ast_append (result, expression);
+        struct ast *expression;
 
-      if (parser_match (parser, TOKEN_RBRACE))
-        break;
+        expression = parser_parse_while (parser);
+        if (ast_match_error (expression))
+          return expression;
 
-      if (!parser_match (parser, TOKEN_SEMICOLON))
-        return parser_error_expect_token (parser, TOKEN_RBRACE);
+        ast_append (result, expression);
 
-      if (parser_advance (parser))
-        return parser_error_from_current (parser);
-    }
+        if (parser_match (parser, TOKEN_RBRACE))
+          break;
+
+        if (!parser_match (parser, TOKEN_SEMICOLON))
+          return parser_error_expect_token (parser, TOKEN_RBRACE);
+
+        if (parser_advance (parser))
+          return parser_error_from_current (parser);
+      }
 
   if (!parser_match (parser, TOKEN_RBRACE))
     return parser_error_expect_token (parser, TOKEN_RBRACE);
@@ -367,6 +378,7 @@ parser_parse_compound_expression (struct parser *parser)
   if (parser_advance (parser))
     return parser_error_from_current (parser);
 
+  result->state = void_;
   return result;
 }
 
@@ -514,6 +526,40 @@ parser_parse_expression (struct parser *parser)
   struct ast *expression = parser_parse_expression_base (parser, 0.0);
   // if (ast_match_error (expression))
   return expression;
+}
+
+struct ast *
+parser_parse_while (struct parser *parser)
+{
+  if (parser_match (parser, TOKEN_WHILE))
+    {
+      if (parser_advance (parser))
+        return parser_error_from_current (parser);
+
+      struct ast *cond = parser_parse_expression (parser);
+      if (ast_match_error (cond))
+        return cond;
+
+      if (!parser_match (parser, TOKEN_DO))
+        return parser_error_expect_token (parser, TOKEN_DO);
+
+      if (parser_advance (parser))
+        return parser_error_from_current (parser);
+
+      struct ast *body = parser_parse_expression (parser);
+      if (ast_match_error (body))
+        return body;
+
+      struct ast *result = ast_create (AST_WHILE, parser->location,
+                                       parser->arena);
+
+      ast_append (result, cond);
+      ast_append (result, body);
+
+      return result;
+    }
+
+  return parser_parse_declaration_expression (parser);
 }
 
 struct ast *

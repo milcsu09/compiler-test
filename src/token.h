@@ -36,6 +36,8 @@ enum token_type
   TOKEN_F64,
   TOKEN_BOOL,
   TOKEN_AS,
+  TOKEN_WHILE,
+  TOKEN_DO,
   // TOKEN_DEFINE,
   // TOKEN_EXTERN
 };

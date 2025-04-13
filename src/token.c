@@ -25,6 +25,8 @@ static const char *const TOKEN_TYPE_STRING[] = {
   "F64-keyword",
   "Bool-keyword",
   "as-keyword",
+  "while-keyword",
+  "do-keyword",
   // "define",
   // "extern"
 };

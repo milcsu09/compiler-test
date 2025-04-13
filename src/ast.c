@@ -11,6 +11,7 @@ static const char *const AST_TYPE_STRING[] = {
   "binary",
   "conditional",
   "compound",
+  "while",
   "declaration",
   "call",
   "prototype",

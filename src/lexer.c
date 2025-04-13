@@ -197,6 +197,10 @@ lexer_lex_identifier (struct lexer *lexer)
     return token_create (TOKEN_BOOL, location);
   if (strncmp (start, "as", 2) == 0)
     return token_create (TOKEN_AS, location);
+  if (strncmp (start, "while", 5) == 0)
+    return token_create (TOKEN_WHILE, location);
+  if (strncmp (start, "do", 2) == 0)
+    return token_create (TOKEN_DO, location);
 
   char *s = string_copy_until (start, lexer->current, lexer->arena);
 
