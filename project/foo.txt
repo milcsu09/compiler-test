@@ -1,27 +1,62 @@
 
+#########################################
+
 putd(a): (F64) -> Void;
 separator(): () -> Void;
+
+#########################################
+
+! (a): (Bool) -> Bool =
+  if a then
+    0 as Bool
+  else
+    1 as Bool;
+
+#########################################
+
+== 60 (a, b): (F64, F64) -> Bool =
+  !(a - b as Bool);
+
+#########################################
 
 or 65 (a, b): (Bool, Bool) -> Bool =
   if a then a else b;
 
+#########################################
+
 and 70 (a, b): (Bool, Bool) -> Bool =
   if a then b else a;
 
+#########################################
+
+putb(a): (Bool) -> Void = putd(a as F64);
+
 Main(): () -> F64 =
   {
-    putd ((0 as Bool) or (0 as Bool) as F64);
-    putd ((1 as Bool) or (0 as Bool) as F64);
-    putd ((0 as Bool) or (1 as Bool) as F64);
-    putd ((1 as Bool) or (1 as Bool) as F64);
+    putb ((0 as Bool) or (0 as Bool));
+    putb ((1 as Bool) or (0 as Bool));
+    putb ((0 as Bool) or (1 as Bool));
+    putb ((1 as Bool) or (1 as Bool));
 
     separator();
 
-    putd ((0 as Bool) and (0 as Bool) as F64);
-    putd ((1 as Bool) and (0 as Bool) as F64);
-    putd ((0 as Bool) and (1 as Bool) as F64);
-    putd ((1 as Bool) and (1 as Bool) as F64);
+    putb ((0 as Bool) and (0 as Bool));
+    putb ((1 as Bool) and (0 as Bool));
+    putb ((0 as Bool) and (1 as Bool));
+    putb ((1 as Bool) and (1 as Bool));
+
+    separator();
+
+    c1: Bool = 1 < 2;
+    c2: Bool = 1 + 1 == 3;
+
+    putb (c1);
+    putb (c2);
+    putb (c1 or c2);
+    putb (c1 and c2);
 
     0
   };
+
+#########################################
 

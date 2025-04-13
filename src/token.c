@@ -13,7 +13,7 @@ static const char *const TOKEN_TYPE_STRING[] = {
   ")",
   "{",
   "}",
-  "=",
+  // "=",
   ",",
   ":",
   "->",

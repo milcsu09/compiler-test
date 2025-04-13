@@ -211,6 +211,10 @@ lexer_valid_punct (char c)
     case ')':
     case '{':
     case '}':
+    case ';':
+    case ',':
+    case '.':
+    case ':':
       return 0;
     default:
       return ispunct (c);
@@ -269,7 +273,7 @@ lexer_next (struct lexer *lexer)
 
     case '=':
       if (!lexer_valid_punct (*(lexer->current + 1)))
-        return lexer_advance_token (lexer, TOKEN_EQUAL);
+        return lexer_advance_identifier_n (lexer, 1);
       break;
 
     case '.':

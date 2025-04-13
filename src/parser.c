@@ -23,14 +23,7 @@ struct precedence
   double precedence;
 };
 
-static struct precedence PRECEDENCE_TABLE[128]; // = {
-//  { "+", 35.0 },
-//  { "-", 35.0 },
-//
-//  { "*", 40.0 },
-//  { "/", 40.0 },
-// };
-
+static struct precedence PRECEDENCE_TABLE[128];
 size_t precedence_n = 0;
 
 void
@@ -115,6 +108,8 @@ parser_advance (struct parser *parser)
   /* 'lexer_next' might return token of type 'TOKEN_ERROR'. */
   parser->current = lexer_next (parser->lexer);
   parser->location = parser->current.location;
+  // if (parser->current.type == TOKEN_IDENTIFIER)
+  //   printf ("'%s'\n", parser->current.value.s);
   return parser_match_error (parser);
 }
 
@@ -130,6 +125,7 @@ struct ast *parser_parse_group_expression(struct parser *);
 struct ast *parser_parse_compound_expression (struct parser *);
 struct ast *parser_parse_conditional_expression (struct parser *);
 
+struct ast *parser_parse_declaration_expression (struct parser *);
 
 // TODO: HANDLE ERRORS!
 struct type *
@@ -325,7 +321,7 @@ parser_parse_compound_expression (struct parser *parser)
     {
       struct ast *expression;
 
-      expression = parser_parse_expression (parser);
+      expression = parser_parse_declaration_expression (parser);
       if (ast_match_error (expression))
         return expression;
 
@@ -514,6 +510,51 @@ parser_parse_expression (struct parser *parser)
 }
 
 struct ast *
+parser_parse_declaration_expression (struct parser *parser)
+{
+  if (parser_match (parser, TOKEN_IDENTIFIER))
+    {
+      struct token peek = lexer_peek (parser->lexer);
+
+      if (peek.type != TOKEN_COLON)
+        return parser_parse_expression (parser);
+
+      struct ast *name = parser_parse_identifier (parser);
+      if (ast_match_error (name))
+        return name;
+
+      if (parser_advance (parser))
+        return parser_error_from_current (parser);
+
+      struct type *type = parser_parse_type_primary (parser);
+
+      struct ast *result = ast_create (AST_DECLARATION, parser->location,
+                                       parser->arena);
+
+      result->expr_type = type;
+      ast_append (result, name);
+
+      if (!parser_match (parser, TOKEN_IDENTIFIER) ||
+          (parser_match (parser, TOKEN_IDENTIFIER) &&
+           strcmp (parser->current.value.s, "=") != 0))
+        return result;
+
+      if (parser_advance (parser))
+        return parser_error_from_current (parser);
+
+      struct ast *value = parser_parse_expression (parser);
+      if (ast_match_error (value))
+        return value;
+
+      ast_append (result, value);
+
+      return result;
+    }
+
+  return parser_parse_expression (parser);
+}
+
+struct ast *
 parser_parse_function_prototype(struct parser *parser)
 {
   struct ast *name;
@@ -622,7 +663,12 @@ parser_parse_top_level_statement(struct parser *parser)
   if (ast_match_error (proto))
     return proto;
 
-  if (!parser_match (parser, TOKEN_EQUAL))
+  // if (!parser_match (parser, TOKEN_EQUAL))
+  //   return proto;
+
+  if (!parser_match (parser, TOKEN_IDENTIFIER) ||
+      (parser_match (parser, TOKEN_IDENTIFIER) &&
+       strcmp (parser->current.value.s, "=") != 0))
     return proto;
 
   if (parser_advance (parser))

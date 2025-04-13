@@ -42,7 +42,6 @@ read_file (const char *filename)
 #include <llvm-c/Transforms/PassManagerBuilder.h>
 #include <llvm-c//Transforms/Utils.h>
 
-int optimize_function = 0;
 int has_error = 0;
 
 LLVMContextRef context;
@@ -82,6 +81,7 @@ typedef struct NamedValue {
   struct NamedValue *next;
 } NamedValue;
 
+
 NamedValue *NamedValues = NULL;
 
 // Helper to add a named value.
@@ -113,6 +113,23 @@ void clearNamedValues() {
   NamedValues = NULL;
 }
 
+
+LLVMValueRef
+create_entry_alloca (LLVMValueRef function, const char *name, LLVMTypeRef type)
+{
+  LLVMBasicBlockRef entryBlock = LLVMGetEntryBasicBlock (function);
+
+  LLVMBuilderRef builder = LLVMCreateBuilder ();
+
+  LLVMPositionBuilderAtEnd (builder, entryBlock);
+
+  LLVMValueRef allocaInst = LLVMBuildAlloca (builder, type, name);
+
+  LLVMDisposeBuilder (builder);
+
+  return allocaInst;
+}
+
 LLVMValueRef generate (struct ast *node);
 
 LLVMValueRef
@@ -139,7 +156,7 @@ generate_cast (struct ast *node)
     case TYPE_BOOL:
       if (t2 == TYPE_F64)
         {
-          LLVMValueRef i32val = LLVMBuildZExt (builder, v, LLVMInt32Type (), "bool_zext");
+          LLVMValueRef i32val = LLVMBuildZExt (builder, v, LLVMInt32TypeInContext (context), "bool_zext");
           return LLVMBuildSIToFP (builder, i32val, LLVMDoubleTypeInContext (context), "bool_to_f64");
         }
       break;
@@ -158,7 +175,10 @@ generate_identifier (struct ast *node)
   if (!value)
     return generate_error (node->location, "undefined-variable");
 
-  return value;
+  LLVMTypeRef t = LLVMGetElementType (LLVMTypeOf (value));
+  LLVMValueRef v = LLVMBuildLoad2 (builder, t, value, name);
+
+  return v;
 }
 
 LLVMValueRef
@@ -171,15 +191,24 @@ generate_number (struct ast *node)
 LLVMValueRef
 generate_binary (struct ast *node)
 {
-  LLVMTypeRef type = LLVMDoubleTypeInContext (context);
+  // LLVMTypeRef type = LLVMDoubleTypeInContext (context);
+
+  const char *operator = node->child->value.token.value.s;
+
+  if (strcmp (operator, "=") == 0)
+    {
+      // node->child->next;
+      LLVMValueRef var = lookupNamedValue (node->child->next->value.token.value.s);
+
+      LLVMValueRef right = generate (node->child->next->next);
+      return LLVMBuildStore (builder, right, var);
+    }
 
   LLVMValueRef left = generate (node->child->next);
   LLVMValueRef right = generate (node->child->next->next);
 
   if (!left || !right)
     return NULL;
-
-  const char *operator = node->child->value.token.value.s;
 
   if (strcmp (operator, "+") == 0)
     return LLVMBuildFAdd (builder, left, right, "");
@@ -233,7 +262,7 @@ generate_conditional (struct ast *node)
   if (!cond_v)
     return NULL;
 
-  LLVMTypeRef type = type_kind_to_llvm (node->expr_type->kind);
+  LLVMTypeRef result_type = type_kind_to_llvm (node->expr_type->kind);
 
   LLVMBasicBlockRef current_bb = LLVMGetInsertBlock (builder);
   LLVMValueRef fn = LLVMGetBasicBlockParent (current_bb);
@@ -255,7 +284,7 @@ generate_conditional (struct ast *node)
   falseBlock = LLVMGetInsertBlock (builder);
 
   LLVMPositionBuilderAtEnd(builder, mergeBlock);
-  LLVMValueRef phi = LLVMBuildPhi(builder, type, "iftmp");
+  LLVMValueRef phi = LLVMBuildPhi(builder, result_type, "iftmp");
 
   LLVMAddIncoming(phi, &valTrue, &trueBlock, 1);
   LLVMAddIncoming(phi, &valFalse, &falseBlock, 1);
@@ -321,6 +350,28 @@ generate_compound (struct ast *node)
     }
 
   return result;
+}
+
+LLVMValueRef
+generate_declaration (struct ast *node)
+{
+  const char *name = node->child->value.token.value.s;
+
+  LLVMBasicBlockRef block = LLVMGetInsertBlock (builder);
+  LLVMValueRef function = LLVMGetBasicBlockParent (block);
+
+  LLVMTypeRef type = type_kind_to_llvm (node->expr_type->kind);
+  LLVMValueRef alloca = create_entry_alloca (function, name, type);
+
+  if (node->child->next != NULL)
+    {
+      LLVMValueRef value = generate (node->child->next);
+      LLVMBuildStore (builder, value, alloca);
+    }
+
+  addNamedValue (name, alloca);
+
+  return alloca;
 }
 
 LLVMValueRef
@@ -425,36 +476,40 @@ generate_function (struct ast *node)
                                                         "entry");
   LLVMPositionBuilderAtEnd (builder, bb);
 
+  // for (auto &Arg : TheFunction->args()) {
+  //   // Create an alloca for this variable.
+  //   AllocaInst *Alloca = CreateEntryBlockAlloca(TheFunction, Arg.getName());
+
+  //   // Store the initial value into the alloca.
+  //   Builder->CreateStore(&Arg, Alloca);
+
+  //   // Add arguments to variable symbol table.
+  //   NamedValues[std::string(Arg.getName())] = Alloca;
+  // }
+
+  size_t n = 0;
+
   clearNamedValues ();
   for (LLVMValueRef argument = LLVMGetFirstParam (function); argument != NULL;
-       argument = LLVMGetNextParam (argument))
-    addNamedValue (LLVMGetValueName (argument), argument);
-
-  LLVMValueRef returnV = generate (node->child->next);
-  if (returnV)
+       argument = LLVMGetNextParam (argument), ++n)
     {
-      LLVMBuildRet (builder, returnV);
+      const char *name = LLVMGetValueName (argument);
+      LLVMTypeRef type = type_kind_to_llvm (node->child->expr_type->value.function.argument_t[n]->kind);
+      LLVMValueRef alloca = create_entry_alloca (function, name, type);
 
-      if (optimize_function)
-        {
-          LLVMPassManagerRef function_pass_manager = LLVMCreateFunctionPassManagerForModule(module);
-          LLVMAddBasicAliasAnalysisPass(function_pass_manager);
-          LLVMAddPromoteMemoryToRegisterPass(function_pass_manager);
-          LLVMAddInstructionCombiningPass(function_pass_manager);
-          LLVMAddReassociatePass(function_pass_manager);
-          LLVMAddGVNPass(function_pass_manager);
-          LLVMAddCFGSimplificationPass(function_pass_manager);
-          LLVMInitializeFunctionPassManager(function_pass_manager);
-          LLVMRunFunctionPassManager(function_pass_manager, function);
-          LLVMFinalizeFunctionPassManager(function_pass_manager);
-          LLVMDisposePassManager(function_pass_manager);
-        }
+      LLVMBuildStore (builder, argument, alloca);
 
-      return function;
+      addNamedValue (name, alloca);
     }
 
-  LLVMDeleteFunction (function);
-  return NULL;
+  LLVMValueRef returnV = generate (node->child->next);
+
+  if (node->child->expr_type->value.function.return_t->kind != TYPE_VOID)
+    LLVMBuildRet (builder, returnV);
+  else
+    LLVMBuildRetVoid (builder);
+
+  return function;
 }
 
 LLVMValueRef
@@ -492,6 +547,8 @@ generate (struct ast *node)
       return generate_conditional (node);
     case AST_COMPOUND:
       return generate_compound (node);
+    case AST_DECLARATION:
+      return generate_declaration (node);
     case AST_CALL:
       return generate_call (node);
     case AST_PROTOTYPE:
@@ -581,6 +638,13 @@ ast_type_check (struct ast *ast, struct arena *arena)
         struct location l = ast->location;
         const char *operator = ast->child->value.token.value.s;
 
+        if (strcmp (operator, "=") == 0)
+          {
+            ast_type_match (right->kind, left->kind, l);
+            ast->expr_type = left;
+            return left;
+          }
+
         if (strcmp (operator, "+") == 0)
           {
             ast_type_match (left->kind, TYPE_F64, l);
@@ -668,7 +732,6 @@ ast_type_check (struct ast *ast, struct arena *arena)
     case AST_CONDITIONAL:
       {
         struct type *cond = ast_type_check (ast->child, arena);
-        struct location l = ast->location;
 
         ast_type_match (cond->kind, TYPE_BOOL, ast->child->location);
 
@@ -689,6 +752,16 @@ ast_type_check (struct ast *ast, struct arena *arena)
           current = current->next;
         ast->expr_type = type;
         return type;
+      }
+      break;
+    case AST_DECLARATION:
+      {
+        struct type *right = ast_type_check (ast->child->next, arena);
+        ast_type_match (right->kind, ast->expr_type->kind, ast->location);
+        variables[variables_n].name = ast->child->value.token.value.s;
+        variables[variables_n].type = right;
+        variables_n++;
+        return right;
       }
       break;
     case AST_CALL:
@@ -868,6 +941,8 @@ main (int argc, char *argv[])
 
   // 1 && 2 == 3
 
+  precedence_table_add ("=", 10);
+
   precedence_table_add ("<", 80);
   precedence_table_add (">", 80);
   precedence_table_add ("<=", 80);
@@ -953,9 +1028,9 @@ main (int argc, char *argv[])
   struct arena type_check_arena = {0};
 
   ast_type_check (ast, &type_check_arena);
-  printf ("-------------------\n");
-  ast_debug_print (ast, 0);
-  printf ("-------------------\n");
+  // printf ("-------------------\n");
+  // ast_debug_print (ast, 0);
+  // printf ("-------------------\n");
 
   (void)generate (ast);
   if (has_error)
