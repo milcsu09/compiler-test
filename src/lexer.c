@@ -188,6 +188,14 @@ lexer_lex_identifier (struct lexer *lexer)
     return token_create (TOKEN_THEN, location);
   if (strncmp (start, "else", 4) == 0)
     return token_create (TOKEN_ELSE, location);
+  if (strncmp (start, "Void", 4) == 0)
+    return token_create (TOKEN_VOID, location);
+  if (strncmp (start, "F64", 3) == 0)
+    return token_create (TOKEN_F64, location);
+  if (strncmp (start, "Bool", 4) == 0)
+    return token_create (TOKEN_BOOL, location);
+  if (strncmp (start, "as", 2) == 0)
+    return token_create (TOKEN_AS, location);
 
   char *s = string_copy_until (start, lexer->current, lexer->arena);
 
@@ -267,6 +275,14 @@ lexer_next (struct lexer *lexer)
     case '.':
       if (lexer_match (lexer, "..."))
         return lexer_advance_token_n (lexer, 3, TOKEN_3DOT);
+      break;
+
+    case ':':
+      return lexer_advance_token (lexer, TOKEN_COLON);
+
+    case '-':
+      if (lexer_match (lexer, "->"))
+        return lexer_advance_token_n (lexer, 2, TOKEN_ARROW);
       break;
 
     /*

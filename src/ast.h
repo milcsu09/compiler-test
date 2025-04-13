@@ -3,6 +3,7 @@
 
 #include "arena.h"
 #include "token.h"
+#include "type.h"
 
 union ast_entry
 {
@@ -13,6 +14,7 @@ union ast_entry
 enum ast_type
 {
   AST_ERROR,
+  AST_CAST,
   AST_IDENTIFIER,
   AST_NUMBER,
   AST_BINARY,
@@ -29,6 +31,7 @@ struct ast
   union ast_entry value;
   enum ast_type type;
   struct location location;
+  struct type *expr_type;
   struct ast *child;
   struct ast *next;
   int state;

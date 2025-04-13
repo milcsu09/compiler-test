@@ -15,10 +15,16 @@ static const char *const TOKEN_TYPE_STRING[] = {
   "}",
   "=",
   ",",
+  ":",
+  "->",
   "...",
   "if-keyword",
   "then-keyword",
   "else-keyword",
+  "Void-keyword",
+  "F64-keyword",
+  "Bool-keyword",
+  "as-keyword",
   // "define",
   // "extern"
 };

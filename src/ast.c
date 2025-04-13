@@ -1,9 +1,11 @@
 #include "ast.h"
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 static const char *const AST_TYPE_STRING[] = {
   "error",
+  "cast",
   "identifier",
   "number",
   "binary",
@@ -33,6 +35,7 @@ ast_create (enum ast_type type, struct location location, struct arena *arena)
 
   ast->type = type;
   ast->location = location;
+  ast->expr_type = NULL;
 
   return ast;
 }
@@ -165,8 +168,17 @@ ast_debug_print (struct ast *ast, size_t depth)
       break;
     }
 
-  printf ("at ");
-  location_debug_print (ast->location);
+  if (ast->expr_type != NULL)
+    {
+      printf (": ");
+      type_debug_print (ast->expr_type);
+    }
+
+  // assert (ast->expr_type != NULL);
+  // printf (": %s", type_kind_string (ast->expr_type->kind));
+
+  // printf ("at ");
+  // location_debug_print (ast->location);
   printf ("\n");
 
   ast_debug_print (ast->child, depth + 1);

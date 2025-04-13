@@ -130,6 +130,83 @@ struct ast *parser_parse_group_expression(struct parser *);
 struct ast *parser_parse_compound_expression (struct parser *);
 struct ast *parser_parse_conditional_expression (struct parser *);
 
+
+// TODO: HANDLE ERRORS!
+struct type *
+parser_parse_type_primary (struct parser *parser)
+{
+  switch (parser->current.type)
+    {
+    case TOKEN_VOID:
+      parser_advance (parser);
+      return type_create (TYPE_VOID, parser->arena);
+    case TOKEN_F64:
+      parser_advance (parser);
+      return type_create (TYPE_F64, parser->arena);
+    case TOKEN_BOOL:
+      parser_advance (parser);
+      return type_create (TYPE_BOOL, parser->arena);
+    default:
+      printf ("Expected F64 or Bool\n");
+      abort();
+    }
+}
+
+// TODO: HANDLE ERRORS!
+struct type *
+parser_parse_type (struct parser *parser)
+{
+  switch (parser->current.type)
+    {
+    case TOKEN_LPAREN:
+      {
+        // (
+        parser_advance (parser);
+
+        size_t capacity = 4;
+
+        struct type_function function;
+        function.argument_t = calloc (capacity, sizeof (struct type *));
+        function.argument_n = 0;
+
+        if (!parser_match (parser, TOKEN_RPAREN))
+          while (1)
+            {
+              struct type *argument;
+
+              argument = parser_parse_type_primary (parser);
+
+              if (function.argument_n >= capacity)
+                {
+                  capacity *= 2;
+                  function.argument_t = realloc (function.argument_t, capacity * sizeof (struct type *));
+                }
+
+              function.argument_t[function.argument_n++] = argument;
+
+              if (parser_match (parser, TOKEN_RPAREN))
+                break;
+
+              // ,
+              parser_advance (parser);
+            }
+
+        // )
+        parser_advance (parser);
+
+        // ->
+        parser_advance (parser);
+
+        function.return_t = parser_parse_type_primary (parser);
+
+        function.variadic = 0;
+        return type_create_f (function, parser->arena);
+      }
+    default:
+      return parser_parse_type_primary (parser);
+    }
+}
+
 struct ast *
 parser_parse_identifier (struct parser *parser)
 {
@@ -173,6 +250,8 @@ parser_parse_primary (struct parser *parser)
 struct ast *
 parser_parse_conditional_expression (struct parser *parser)
 {
+  struct location l_result = parser->location;
+
   if (!parser_match (parser, TOKEN_IF))
     return parser_error_expect_token (parser, TOKEN_IF);
 
@@ -184,6 +263,8 @@ parser_parse_conditional_expression (struct parser *parser)
   struct ast *else_node;
   struct ast *result;
 
+  struct location l_cond = parser->location;
+
   cond_node = parser_parse_expression (parser);
   if (ast_match_error (cond_node))
     return cond_node;
@@ -193,6 +274,8 @@ parser_parse_conditional_expression (struct parser *parser)
 
   if (parser_advance (parser))
     return parser_error_from_current (parser);
+
+  struct location l_then = parser->location;
 
   then_node = parser_parse_expression (parser);
   if (ast_match_error (then_node))
@@ -204,6 +287,8 @@ parser_parse_conditional_expression (struct parser *parser)
   if (parser_advance (parser))
     return parser_error_from_current (parser);
 
+  struct location l_else = parser->location;
+
   else_node = parser_parse_expression (parser);
   if (ast_match_error (else_node))
     return else_node;
@@ -213,6 +298,11 @@ parser_parse_conditional_expression (struct parser *parser)
   ast_append (result, cond_node);
   ast_append (result, then_node);
   ast_append (result, else_node);
+
+  result->location = l_result;
+  cond_node->location = l_cond;
+  then_node->location = l_then;
+  else_node->location = l_else;
 
   return result;
 }
@@ -326,12 +416,16 @@ parser_parse_number_expression (struct parser *parser)
   if (parser_advance (parser))
     return parser_error_from_current (parser);
 
+  result->expr_type = type_create (TYPE_F64, parser->arena);
+
   return result;
 }
 
 struct ast *
 parser_parse_group_expression (struct parser *parser)
 {
+  struct location location = parser->location;
+
   if (!parser_match (parser, TOKEN_LPAREN))
     return parser_error_expect_token (parser, TOKEN_LPAREN);
 
@@ -350,6 +444,7 @@ parser_parse_group_expression (struct parser *parser)
   if (parser_advance (parser))
     return parser_error_from_current (parser);
 
+  result->location = location;
   return result;
 }
 
@@ -380,7 +475,7 @@ parser_parse_expression_base (struct parser *parser, double previous)
         return right;
 
       struct ast *t;
-      t = ast_create (AST_BINARY, parser->location, parser->arena);
+      t = ast_create (AST_BINARY, left->location, parser->arena);
 
       ast_append (t, middle);
       ast_append (t, left);
@@ -397,7 +492,25 @@ parser_parse_expression_base (struct parser *parser, double previous)
 struct ast *
 parser_parse_expression (struct parser *parser)
 {
-  return parser_parse_expression_base (parser, 0.0);
+  struct ast *expression = parser_parse_expression_base (parser, 0.0);
+  if (ast_match_error (expression))
+    return expression;
+
+  if (!parser_match (parser, TOKEN_AS))
+    return expression;
+
+  struct ast *cast = ast_create (AST_CAST, parser->location, parser->arena);
+
+  if (parser_advance (parser))
+    return parser_error_from_current (parser);
+
+  struct type *type = parser_parse_type_primary (parser);
+
+  ast_append (cast, expression);
+
+  cast->expr_type = type;
+
+  return cast;
 }
 
 struct ast *
@@ -485,6 +598,16 @@ parser_parse_function_prototype(struct parser *parser)
 
       precedence_table_add (name->value.token.value.s, precedence);
     }
+
+  if (!parser_match (parser, TOKEN_COLON))
+    return parser_error_expect_token (parser, TOKEN_COLON);
+
+  if (parser_advance (parser))
+    return parser_error_from_current (parser);
+
+  struct type *type = parser_parse_type (parser);
+  type->value.function.variadic = variadic;
+  result->expr_type = type;
 
   result->state = variadic;
   return result;

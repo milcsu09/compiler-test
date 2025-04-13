@@ -1,101 +1,74 @@
 ; ModuleID = 'Main'
 source_filename = "Main"
 
-declare double @putd(double)
+declare void @putd(double)
 
-declare double @putds(double, ...)
+declare void @separator()
 
-declare double @putsep(double, double)
-
-declare double @mandelbrot_plot(double, double, double, double, double, double)
-
-declare double @sqrt(double)
-
-define double @"||"(double %a, double %b) {
+define i1 @or(i1 %a, i1 %b) {
 entry:
-  %cond = fcmp ueq double %a, 0.000000e+00
-  %cond1 = fcmp ueq double %b, 0.000000e+00
-  %. = select i1 %cond1, double 0.000000e+00, double 1.000000e+00
-  %0 = select i1 %cond, double %., double 1.000000e+00
-  ret double %0
+  br i1 %a, label %if.true, label %if.false
+
+if.true:                                          ; preds = %entry
+  br label %if.merge
+
+if.false:                                         ; preds = %entry
+  br label %if.merge
+
+if.merge:                                         ; preds = %if.false, %if.true
+  %iftmp = phi i1 [ %a, %if.true ], [ %b, %if.false ]
+  ret i1 %iftmp
 }
 
-define double @"&&"(double %a, double %b) {
+define i1 @and(i1 %a, i1 %b) {
 entry:
-  %cond = fcmp ueq double %a, 0.000000e+00
-  %cond1 = fcmp ueq double %b, 0.000000e+00
-  %. = select i1 %cond1, double 0.000000e+00, double 1.000000e+00
-  %0 = select i1 %cond, double 0.000000e+00, double %.
-  ret double %0
-}
+  br i1 %a, label %if.true, label %if.false
 
-define double @"=="(double %a, double %b) {
-entry:
-  %0 = fsub double %a, %b
-  %cond = fcmp ueq double %0, 0.000000e+00
-  %. = select i1 %cond, double 1.000000e+00, double 0.000000e+00
-  ret double %.
-}
+if.true:                                          ; preds = %entry
+  br label %if.merge
 
-define double @"!="(double %a, double %b) {
-entry:
-  %0 = fsub double %a, %b
-  %cond = fcmp ueq double %0, 0.000000e+00
-  %. = select i1 %cond, double 0.000000e+00, double 1.000000e+00
-  ret double %.
-}
+if.false:                                         ; preds = %entry
+  br label %if.merge
 
-define double @"!"(double %a) {
-entry:
-  %cond = fcmp ueq double %a, 0.000000e+00
-  %. = select i1 %cond, double 1.000000e+00, double 0.000000e+00
-  ret double %.
-}
-
-define double @-(double %a) {
-entry:
-  %0 = fsub double 0.000000e+00, %a
-  ret double %0
-}
-
-define double @mandelbrot_converge_help(double %real, double %imag, double %iters, double %creal, double %cimag) {
-entry:
-  %0 = fcmp ogt double %iters, 1.002400e+04
-  %1 = uitofp i1 %0 to double
-  %2 = fmul double %real, %real
-  %3 = fmul double %imag, %imag
-  %4 = fadd double %2, %3
-  %5 = fcmp ogt double %4, 4.000000e+00
-  %6 = uitofp i1 %5 to double
-  %7 = call double @"||"(double %1, double %6)
-  %cond = fcmp ueq double %7, 0.000000e+00
-  br i1 %cond, label %8, label %16
-
-8:                                                ; preds = %entry
-  %9 = fsub double %2, %3
-  %10 = fadd double %9, %creal
-  %11 = fmul double %real, 2.000000e+00
-  %12 = fmul double %11, %imag
-  %13 = fadd double %12, %cimag
-  %14 = fadd double %iters, 1.000000e+00
-  %15 = call double @mandelbrot_converge_help(double %10, double %13, double %14, double %creal, double %cimag)
-  br label %16
-
-16:                                               ; preds = %entry, %8
-  %17 = phi double [ %15, %8 ], [ %iters, %entry ]
-  ret double %17
-}
-
-define double @mandelbrot_converge(double %real, double %imag) {
-entry:
-  %0 = call double @mandelbrot_converge_help(double %real, double %imag, double 0.000000e+00, double %real, double %imag)
-  ret double %0
+if.merge:                                         ; preds = %if.false, %if.true
+  %iftmp = phi i1 [ %b, %if.true ], [ %a, %if.false ]
+  ret i1 %iftmp
 }
 
 define double @Main() {
 entry:
-  %0 = call double @-(double 2.750000e+00)
-  %1 = call double @-(double 1.500000e+00)
-  %2 = call double @mandelbrot_plot(double %0, double 1.250000e+00, double 3.750000e-02, double %1, double 1.500000e+00, double 5.000000e-02)
+  %0 = call i1 @or(i1 false, i1 false)
+  %bool_zext = zext i1 %0 to i32
+  %bool_to_f64 = sitofp i32 %bool_zext to double
+  call void @putd(double %bool_to_f64)
+  %1 = call i1 @or(i1 true, i1 false)
+  %bool_zext1 = zext i1 %1 to i32
+  %bool_to_f642 = sitofp i32 %bool_zext1 to double
+  call void @putd(double %bool_to_f642)
+  %2 = call i1 @or(i1 false, i1 true)
+  %bool_zext3 = zext i1 %2 to i32
+  %bool_to_f644 = sitofp i32 %bool_zext3 to double
+  call void @putd(double %bool_to_f644)
+  %3 = call i1 @or(i1 true, i1 true)
+  %bool_zext5 = zext i1 %3 to i32
+  %bool_to_f646 = sitofp i32 %bool_zext5 to double
+  call void @putd(double %bool_to_f646)
+  call void @separator()
+  %4 = call i1 @and(i1 false, i1 false)
+  %bool_zext7 = zext i1 %4 to i32
+  %bool_to_f648 = sitofp i32 %bool_zext7 to double
+  call void @putd(double %bool_to_f648)
+  %5 = call i1 @and(i1 true, i1 false)
+  %bool_zext9 = zext i1 %5 to i32
+  %bool_to_f6410 = sitofp i32 %bool_zext9 to double
+  call void @putd(double %bool_to_f6410)
+  %6 = call i1 @and(i1 false, i1 true)
+  %bool_zext11 = zext i1 %6 to i32
+  %bool_to_f6412 = sitofp i32 %bool_zext11 to double
+  call void @putd(double %bool_to_f6412)
+  %7 = call i1 @and(i1 true, i1 true)
+  %bool_zext13 = zext i1 %7 to i32
+  %bool_to_f6414 = sitofp i32 %bool_zext13 to double
+  call void @putd(double %bool_to_f6414)
   ret double 0.000000e+00
 }
