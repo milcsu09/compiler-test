@@ -25,9 +25,9 @@ if.merge:                                         ; preds = %if.false, %if.true
 
 define i1 @"=="(double %a, double %b) {
 entry:
+  %b2 = alloca double, align 8
   %a1 = alloca double, align 8
   store double %a, double* %a1, align 8
-  %b2 = alloca double, align 8
   store double %b, double* %b2, align 8
   %a3 = load double, double* %a1, align 8
   %b4 = load double, double* %b2, align 8
@@ -39,9 +39,9 @@ entry:
 
 define i1 @or(i1 %a, i1 %b) {
 entry:
+  %b2 = alloca i1, align 1
   %a1 = alloca i1, align 1
   store i1 %a, i1* %a1, align 1
-  %b2 = alloca i1, align 1
   store i1 %b, i1* %b2, align 1
   %a3 = load i1, i1* %a1, align 1
   br i1 %a3, label %if.true, label %if.false
@@ -61,9 +61,9 @@ if.merge:                                         ; preds = %if.false, %if.true
 
 define i1 @and(i1 %a, i1 %b) {
 entry:
+  %b2 = alloca i1, align 1
   %a1 = alloca i1, align 1
   store i1 %a, i1* %a1, align 1
-  %b2 = alloca i1, align 1
   store i1 %b, i1* %b2, align 1
   %a3 = load i1, i1* %a1, align 1
   br i1 %a3, label %if.true, label %if.false
@@ -92,8 +92,23 @@ entry:
   ret void
 }
 
+define i1 @"=>"(i1 %a, i1 %b) {
+entry:
+  %b2 = alloca i1, align 1
+  %a1 = alloca i1, align 1
+  store i1 %a, i1* %a1, align 1
+  store i1 %b, i1* %b2, align 1
+  %a3 = load i1, i1* %a1, align 1
+  %0 = call i1 @"!"(i1 %a3)
+  %b4 = load i1, i1* %b2, align 1
+  %1 = call i1 @or(i1 %0, i1 %b4)
+  ret i1 %1
+}
+
 define double @Main() {
 entry:
+  %c2 = alloca i1, align 1
+  %c1 = alloca i1, align 1
   %0 = call i1 @or(i1 false, i1 false)
   call void @putb(i1 %0)
   %1 = call i1 @or(i1 true, i1 false)
@@ -112,12 +127,9 @@ entry:
   %7 = call i1 @and(i1 true, i1 true)
   call void @putb(i1 %7)
   call void @separator()
-  %c1 = alloca i1, align 1
   store i1 true, i1* %c1, align 1
-  %c2 = alloca i1, align 1
   %8 = call i1 @"=="(double 2.000000e+00, double 3.000000e+00)
   store i1 %8, i1* %c2, align 1
-  store i1 true, i1* %c1, align 1
   %c11 = load i1, i1* %c1, align 1
   call void @putb(i1 %c11)
   %c22 = load i1, i1* %c2, align 1

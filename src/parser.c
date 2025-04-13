@@ -223,24 +223,48 @@ parser_parse_identifier (struct parser *parser)
 struct ast *
 parser_parse_primary (struct parser *parser)
 {
+  struct ast *expression;
+
   switch (parser->current.type)
     {
     case TOKEN_IDENTIFIER:
-      return parser_parse_identifier_expression (parser);
+      expression = parser_parse_identifier_expression (parser);
+      break;
     case TOKEN_NUMBER:
-      return parser_parse_number_expression (parser);
+      expression = parser_parse_number_expression (parser);
+      break;
     case TOKEN_LPAREN:
-      return parser_parse_group_expression (parser);
+      expression = parser_parse_group_expression (parser);
+      break;
     case TOKEN_LBRACE:
-      return parser_parse_compound_expression (parser);
+      expression = parser_parse_compound_expression (parser);
+      break;
     case TOKEN_IF:
-      return parser_parse_conditional_expression (parser);
+      expression = parser_parse_conditional_expression (parser);
+      break;
     default:
       {
         const char *b = token_type_string (parser->current.type);
         return parser_error_expect_base (parser, "expression", b);
       }
     }
+
+  if (!parser_match (parser, TOKEN_AS))
+    return expression;
+
+  struct ast *cast = ast_create (AST_CAST, parser->location, parser->arena);
+
+  if (parser_advance (parser))
+    return parser_error_from_current (parser);
+
+  struct type *type = parser_parse_type_primary (parser);
+
+  ast_append (cast, expression);
+
+  cast->expr_type = type;
+
+  return cast;
+
 }
 
 struct ast *
@@ -345,7 +369,6 @@ parser_parse_compound_expression (struct parser *parser)
 
   return result;
 }
-
 
 struct ast *
 parser_parse_identifier_expression (struct parser *parser)
@@ -489,24 +512,8 @@ struct ast *
 parser_parse_expression (struct parser *parser)
 {
   struct ast *expression = parser_parse_expression_base (parser, 0.0);
-  if (ast_match_error (expression))
-    return expression;
-
-  if (!parser_match (parser, TOKEN_AS))
-    return expression;
-
-  struct ast *cast = ast_create (AST_CAST, parser->location, parser->arena);
-
-  if (parser_advance (parser))
-    return parser_error_from_current (parser);
-
-  struct type *type = parser_parse_type_primary (parser);
-
-  ast_append (cast, expression);
-
-  cast->expr_type = type;
-
-  return cast;
+  // if (ast_match_error (expression))
+  return expression;
 }
 
 struct ast *

@@ -75,70 +75,164 @@ type_kind_to_llvm (enum type_kind kind)
     }
 }
 
-typedef struct NamedValue {
-  char *name;
+enum symbol_type
+{
+  SYMBOL_TYPE,
+  SYMBOL_VALUE,
+};
+
+union symbol_value
+{
+  struct type *type;
   LLVMValueRef value;
-  struct NamedValue *next;
-} NamedValue;
+};
 
+struct symbol
+{
+  union symbol_value value;
+  char *name;
+  enum symbol_type type;
+};
 
-NamedValue *NamedValues = NULL;
+struct symbol *
+symbol_create (enum symbol_type type, const char *name)
+{
+  struct symbol *symbol;
 
-// Helper to add a named value.
-void addNamedValue(const char *name, LLVMValueRef value) {
-  NamedValue *nv = malloc(sizeof(NamedValue));
-  nv->name = strdup(name);
-  nv->value = value;
-  nv->next = NamedValues;
-  NamedValues = nv;
+  symbol = calloc (1, sizeof (struct symbol));
+
+  symbol->type = type;
+  symbol->name = string_copy (name, NULL);
+
+  return symbol;
 }
 
-// Helper to look up a named value.
-LLVMValueRef lookupNamedValue(const char *name) {
-  for (NamedValue *nv = NamedValues; nv; nv = nv->next)
-    if (strcmp(nv->name, name) == 0)
-      return nv->value;
+void
+symbol_destroy (struct symbol *symbol)
+{
+  free (symbol->name);
+  free (symbol);
+}
+
+struct scope
+{
+  struct scope *parent;
+  struct symbol **table;
+  size_t table_capacity;
+  size_t table_n;
+};
+
+struct scope *
+scope_create (struct scope *parent)
+{
+  struct scope *scope;
+
+  scope = calloc (1, sizeof (struct scope));
+
+  scope->parent = parent;
+  scope->table_capacity = 4;
+  scope->table_n = 0;
+
+  scope->table = calloc (scope->table_capacity, sizeof (struct symbol *));
+
+  return scope;
+}
+
+void
+scope_clear (struct scope *scope)
+{
+  for (size_t i = 0; i < scope->table_n; ++i)
+    symbol_destroy (scope->table[i]);
+  scope->table_n = 0;
+}
+
+void
+scope_destroy (struct scope *scope)
+{
+  scope_clear (scope);
+  free (scope->table);
+  free (scope);
+}
+
+void
+scope_add (struct scope *scope, struct symbol *symbol)
+{
+  if (scope->table_n >= scope->table_capacity)
+    {
+      scope->table_capacity *= 2.0;
+      scope->table = realloc (scope->table,
+                              scope->table_capacity * sizeof (struct symbol *));
+    }
+
+  scope->table[scope->table_n++] = symbol;
+}
+
+struct symbol *
+scope_find (struct scope *scope, const char *name)
+{
+  for (size_t i = 0; i < scope->table_n; ++i)
+    if (strcmp (scope->table[i]->name, name) == 0)
+      return scope->table[i];
+
+  if (scope->parent)
+    return scope_find (scope->parent, name);
+
   return NULL;
 }
 
-// Clear the named values map.
-void clearNamedValues() {
-  NamedValue *nv = NamedValues;
-  while (nv) {
-    NamedValue *next = nv->next;
-    free(nv->name);
-    free(nv);
-    nv = next;
-  }
-  NamedValues = NULL;
+LLVMValueRef
+create_entry_alloca(LLVMValueRef function, const char *name, LLVMTypeRef type)
+{
+  LLVMBasicBlockRef entry = LLVMGetEntryBasicBlock(function);
+  LLVMValueRef first_instr = LLVMGetFirstInstruction(entry);
+
+  // Save current builder position
+  LLVMBasicBlockRef curr_bb = LLVMGetInsertBlock(builder);
+  // LLVMGetFirstInstruction ()
+  // LLVMValueRef curr_instr = LLVMGetInstruction(builder);
+
+  // Temporarily move builder to insert before first instruction in entry block
+  if (first_instr)
+    LLVMPositionBuilderBefore(builder, first_instr);
+  else
+    LLVMPositionBuilderAtEnd(builder, entry); // fallback if entry is empty
+
+  LLVMValueRef alloca = LLVMBuildAlloca(builder, type, name);
+
+  // Restore builder position
+  // if (curr_instr)
+  //   LLVMPositionBuilderBefore(builder, curr_instr);
+  // else
+  LLVMPositionBuilderAtEnd(builder, curr_bb);
+
+  return alloca;
 }
 
-
 LLVMValueRef
-create_entry_alloca (LLVMValueRef function, const char *name, LLVMTypeRef type)
+create_entry_alloca2 (LLVMValueRef function, const char *name, LLVMTypeRef type)
 {
   LLVMBasicBlockRef entryBlock = LLVMGetEntryBasicBlock (function);
 
-  LLVMBuilderRef builder = LLVMCreateBuilder ();
+  LLVMBuilderRef new_builder = LLVMCreateBuilder ();
 
-  LLVMPositionBuilderAtEnd (builder, entryBlock);
+  LLVMPositionBuilderAtEnd (new_builder, entryBlock);
 
-  LLVMValueRef allocaInst = LLVMBuildAlloca (builder, type, name);
+  LLVMValueRef allocaInst = LLVMBuildAlloca (new_builder, type, name);
 
-  LLVMDisposeBuilder (builder);
+  LLVMDisposeBuilder (new_builder);
 
   return allocaInst;
 }
 
-LLVMValueRef generate (struct ast *node);
+LLVMValueRef generate (struct ast *node, struct scope *scope);
 
 LLVMValueRef
-generate_cast (struct ast *node)
+generate_cast (struct ast *node, struct scope *scope)
 {
   enum type_kind t1 = node->child->expr_type->kind;
   enum type_kind t2 = node->expr_type->kind;
 
-  LLVMValueRef v = generate (node->child);
+  LLVMValueRef v = generate (node->child, scope);
 
   // printf ("'%s' to '%s'\n",
   //         type_kind_string (t1),
@@ -168,12 +262,15 @@ generate_cast (struct ast *node)
 }
 
 LLVMValueRef
-generate_identifier (struct ast *node)
+generate_identifier (struct ast *node, struct scope *scope)
 {
   const char *name = node->value.token.value.s;
-  LLVMValueRef value = lookupNamedValue (name);
-  if (!value)
+  struct symbol *symbol = scope_find (scope, name);
+
+  if (!symbol)
     return generate_error (node->location, "undefined-variable");
+
+  LLVMValueRef value = symbol->value.value;
 
   LLVMTypeRef t = LLVMGetElementType (LLVMTypeOf (value));
   LLVMValueRef v = LLVMBuildLoad2 (builder, t, value, name);
@@ -182,14 +279,14 @@ generate_identifier (struct ast *node)
 }
 
 LLVMValueRef
-generate_number (struct ast *node)
+generate_number (struct ast *node, struct scope *scope)
 {
   return LLVMConstReal (LLVMDoubleTypeInContext (context),
                         node->value.token.value.f);
 }
 
 LLVMValueRef
-generate_binary (struct ast *node)
+generate_binary (struct ast *node, struct scope *scope)
 {
   // LLVMTypeRef type = LLVMDoubleTypeInContext (context);
 
@@ -197,15 +294,17 @@ generate_binary (struct ast *node)
 
   if (strcmp (operator, "=") == 0)
     {
-      // node->child->next;
-      LLVMValueRef var = lookupNamedValue (node->child->next->value.token.value.s);
+      struct symbol *symbol =
+        scope_find (scope, node->child->next->value.token.value.s);
 
-      LLVMValueRef right = generate (node->child->next->next);
+      LLVMValueRef var = symbol->value.value;
+
+      LLVMValueRef right = generate (node->child->next->next, scope);
       return LLVMBuildStore (builder, right, var);
     }
 
-  LLVMValueRef left = generate (node->child->next);
-  LLVMValueRef right = generate (node->child->next->next);
+  LLVMValueRef left = generate (node->child->next, scope);
+  LLVMValueRef right = generate (node->child->next->next, scope);
 
   if (!left || !right)
     return NULL;
@@ -256,9 +355,9 @@ generate_binary (struct ast *node)
 }
 
 LLVMValueRef
-generate_conditional (struct ast *node)
+generate_conditional (struct ast *node, struct scope *scope)
 {
-  LLVMValueRef cond_v = generate (node->child);
+  LLVMValueRef cond_v = generate (node->child, scope);
   if (!cond_v)
     return NULL;
 
@@ -274,12 +373,12 @@ generate_conditional (struct ast *node)
   LLVMBuildCondBr(builder, cond_v, trueBlock, falseBlock);
 
   LLVMPositionBuilderAtEnd(builder, trueBlock);
-  LLVMValueRef valTrue = generate (node->child->next);
+  LLVMValueRef valTrue = generate (node->child->next, scope);
   LLVMBuildBr(builder, mergeBlock);
   trueBlock = LLVMGetInsertBlock (builder);
 
   LLVMPositionBuilderAtEnd(builder, falseBlock);
-  LLVMValueRef valFalse = generate (node->child->next->next);
+  LLVMValueRef valFalse = generate (node->child->next->next, scope);
   LLVMBuildBr(builder, mergeBlock);
   falseBlock = LLVMGetInsertBlock (builder);
 
@@ -290,70 +389,33 @@ generate_conditional (struct ast *node)
   LLVMAddIncoming(phi, &valFalse, &falseBlock, 1);
 
   return phi;
-
-
-
-  /*LLVMTypeRef type = LLVMDoubleTypeInContext (context);
-  LLVMValueRef zero = LLVMConstReal (type, 0.0);
-
-  cond_v = LLVMBuildFCmp (builder, LLVMRealONE, cond_v, zero, "cond");
-
-  LLVMBasicBlockRef current_bb = LLVMGetInsertBlock (builder);
-  LLVMValueRef function = LLVMGetBasicBlockParent (current_bb);
-
-  LLVMBasicBlockRef then_bb  = LLVMAppendBasicBlockInContext (context, function, "");
-  LLVMBasicBlockRef else_bb  = LLVMAppendBasicBlockInContext (context, function, "");
-  LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext (context, function, "");
-
-  LLVMBuildCondBr (builder, cond_v, then_bb, else_bb);
-
-  LLVMPositionBuilderAtEnd (builder, then_bb);
-  LLVMValueRef then_v = generate (node->child->next);
-  if (!then_v)
-    return NULL;
-
-  LLVMBuildBr (builder, merge_bb);
-  then_bb = LLVMGetInsertBlock (builder);
-
-  LLVMPositionBuilderAtEnd (builder, else_bb);
-  LLVMValueRef else_v = generate (node->child->next->next);
-  if (!else_v)
-    return NULL;
-
-  LLVMBuildBr (builder, merge_bb);
-  else_bb = LLVMGetInsertBlock (builder);
-
-  LLVMPositionBuilderAtEnd (builder, merge_bb);
-
-  LLVMValueRef phi = LLVMBuildPhi (builder, type, "");
-
-  LLVMValueRef in_v[2] = { then_v, else_v };
-  LLVMBasicBlockRef in_bb[2] = { then_bb, else_bb };
-  LLVMAddIncoming (phi, in_v, in_bb, 2);
-
-  return phi;*/
 }
 
 LLVMValueRef
-generate_compound (struct ast *node)
+generate_compound (struct ast *node, struct scope *scope)
 {
   struct ast *current = node->child;
+
+  struct scope *child = scope_create (scope);
+
   LLVMValueRef result;
 
   while (current)
     {
-      result = generate (current);
+      result = generate (current, child);
       if (result == NULL)
         return NULL;
 
       current = current->next;
     }
 
+  scope_destroy (child);
+
   return result;
 }
 
 LLVMValueRef
-generate_declaration (struct ast *node)
+generate_declaration (struct ast *node, struct scope *scope)
 {
   const char *name = node->child->value.token.value.s;
 
@@ -365,17 +427,22 @@ generate_declaration (struct ast *node)
 
   if (node->child->next != NULL)
     {
-      LLVMValueRef value = generate (node->child->next);
+      LLVMValueRef value = generate (node->child->next, scope);
       LLVMBuildStore (builder, value, alloca);
     }
 
-  addNamedValue (name, alloca);
+  struct symbol *symbol;
+
+  symbol = symbol_create (SYMBOL_VALUE, name);
+  symbol->value.value = alloca;
+
+  scope_add (scope, symbol);
 
   return alloca;
 }
 
 LLVMValueRef
-generate_call (struct ast *node)
+generate_call (struct ast *node, struct scope *scope)
 {
   const char *name = node->child->value.token.value.s;
   LLVMValueRef function = LLVMGetNamedFunction (module, name);
@@ -409,7 +476,7 @@ generate_call (struct ast *node)
   current = node->child->next;
   for (size_t i = 0; i < n; ++i)
     {
-      arguments[i] = generate (current);
+      arguments[i] = generate (current, scope);
       if (!arguments[i])
         return NULL;
 
@@ -422,7 +489,7 @@ generate_call (struct ast *node)
 }
 
 LLVMValueRef
-generate_prototype (struct ast *node)
+generate_prototype (struct ast *node, struct scope *scope)
 {
   const char *name = node->child->value.token.value.s;
 
@@ -461,13 +528,13 @@ generate_prototype (struct ast *node)
 }
 
 LLVMValueRef
-generate_function (struct ast *node)
+generate_function (struct ast *node, struct scope *scope)
 {
   const char *name = node->child->child->value.token.value.s;
   LLVMValueRef function = LLVMGetNamedFunction (module, name);
 
   if (!function)
-    function = generate_prototype (node->child);
+    function = generate_prototype (node->child, scope);
 
   if (!function)
     return NULL;
@@ -489,7 +556,7 @@ generate_function (struct ast *node)
 
   size_t n = 0;
 
-  clearNamedValues ();
+  scope_clear (scope);
   for (LLVMValueRef argument = LLVMGetFirstParam (function); argument != NULL;
        argument = LLVMGetNextParam (argument), ++n)
     {
@@ -499,10 +566,15 @@ generate_function (struct ast *node)
 
       LLVMBuildStore (builder, argument, alloca);
 
-      addNamedValue (name, alloca);
+      struct symbol *symbol;
+
+      symbol = symbol_create (SYMBOL_VALUE, name);
+      symbol->value.value = alloca;
+
+      scope_add (scope, symbol);
     }
 
-  LLVMValueRef returnV = generate (node->child->next);
+  LLVMValueRef returnV = generate (node->child->next, scope);
 
   if (node->child->expr_type->value.function.return_t->kind != TYPE_VOID)
     LLVMBuildRet (builder, returnV);
@@ -513,13 +585,13 @@ generate_function (struct ast *node)
 }
 
 LLVMValueRef
-generate_program (struct ast *node)
+generate_program (struct ast *node, struct scope *scope)
 {
   struct ast *current = node->child;
 
   while (current != NULL)
     {
-      if (generate (current) == NULL)
+      if (generate (current, scope) == NULL)
         return NULL;
 
       current = current->next;
@@ -529,34 +601,34 @@ generate_program (struct ast *node)
 }
 
 LLVMValueRef
-generate (struct ast *node)
+generate (struct ast *node, struct scope *scope)
 {
   switch (node->type)
     {
     case AST_ERROR:
       return NULL;
     case AST_CAST:
-      return generate_cast (node);
+      return generate_cast (node, scope);
     case AST_IDENTIFIER:
-      return generate_identifier (node);
+      return generate_identifier (node, scope);
     case AST_NUMBER:
-      return generate_number (node);
+      return generate_number (node, scope);
     case AST_BINARY:
-      return generate_binary (node);
+      return generate_binary (node, scope);
     case AST_CONDITIONAL:
-      return generate_conditional (node);
+      return generate_conditional (node, scope);
     case AST_COMPOUND:
-      return generate_compound (node);
+      return generate_compound (node, scope);
     case AST_DECLARATION:
-      return generate_declaration (node);
+      return generate_declaration (node, scope);
     case AST_CALL:
-      return generate_call (node);
+      return generate_call (node, scope);
     case AST_PROTOTYPE:
-      return generate_prototype (node);
+      return generate_prototype (node, scope);
     case AST_FUNCTION:
-      return generate_function (node);
+      return generate_function (node, scope);
     case AST_PROGRAM:
-      return generate_program (node);
+      return generate_program (node, scope);
     }
 }
 
@@ -575,6 +647,7 @@ ast_type_match (enum type_kind a, enum type_kind b, struct location location)
     }
 }
 
+/*
 struct comptime_function
 {
   const char *name;
@@ -592,9 +665,11 @@ struct comptime_variable
 
 struct comptime_variable variables[256];
 size_t variables_n = 0;
+*/
 
 struct type *
-ast_type_check (struct ast *ast, struct arena *arena)
+ast_type_check (struct ast *ast, struct arena *arena, struct scope *fs,
+                struct scope *vs)
 {
   switch (ast->type)
     {
@@ -602,7 +677,7 @@ ast_type_check (struct ast *ast, struct arena *arena)
       break;
     case AST_CAST:
       {
-        struct type *type = ast_type_check (ast->child, arena);
+        struct type *type = ast_type_check (ast->child, arena, fs, vs);
 
         if (!type_can_cast (type->kind, ast->expr_type->kind))
           {
@@ -616,13 +691,11 @@ ast_type_check (struct ast *ast, struct arena *arena)
       break;
     case AST_IDENTIFIER:
       {
-        for (size_t i = 0; i < variables_n; ++i)
+        struct symbol *symbol = scope_find (vs, ast->value.token.value.s);
+        if (symbol)
           {
-            if (strcmp (ast->value.token.value.s, variables[i].name) == 0)
-              {
-                ast->expr_type = variables[i].type;
-                return ast->expr_type;
-              }
+            ast->expr_type = symbol->value.type;
+            return ast->expr_type;
           }
 
         printf ("undefined %s\n", ast->value.token.value.s);
@@ -633,8 +706,8 @@ ast_type_check (struct ast *ast, struct arena *arena)
       return ast->expr_type;
     case AST_BINARY:
       {
-        struct type *left = ast_type_check (ast->child->next, arena);
-        struct type *right = ast_type_check (ast->child->next->next, arena);
+        struct type *left = ast_type_check (ast->child->next, arena, fs, vs);
+        struct type *right = ast_type_check (ast->child->next->next, arena, fs, vs);
         struct location l = ast->location;
         const char *operator = ast->child->value.token.value.s;
 
@@ -713,15 +786,16 @@ ast_type_check (struct ast *ast, struct arena *arena)
             return type;
           }
 
-        for (size_t i = 0; i < functions_n; ++i)
-          if (strcmp (operator, functions[i].name) == 0)
-            {
-              struct type_function function = functions[i].type->value.function;
-              ast_type_match (left->kind, function.argument_t[0]->kind, l);
-              ast_type_match (right->kind, function.argument_t[1]->kind, l);
-              ast->expr_type = function.return_t;
-              return function.return_t;
-            }
+        struct symbol *symbol = scope_find (fs, operator);
+
+        if (symbol)
+          {
+            struct type_function function = symbol->value.type->value.function;
+            ast_type_match (left->kind, function.argument_t[0]->kind, l);
+            ast_type_match (right->kind, function.argument_t[1]->kind, l);
+            ast->expr_type = function.return_t;
+            return function.return_t;
+          }
 
         printf ("ERROR: undefined operator-function %s\n", operator);
         abort ();
@@ -731,12 +805,12 @@ ast_type_check (struct ast *ast, struct arena *arena)
       break;
     case AST_CONDITIONAL:
       {
-        struct type *cond = ast_type_check (ast->child, arena);
+        struct type *cond = ast_type_check (ast->child, arena, fs, vs);
 
         ast_type_match (cond->kind, TYPE_BOOL, ast->child->location);
 
-        struct type *then_t = ast_type_check (ast->child->next, arena);
-        struct type *else_t = ast_type_check (ast->child->next->next, arena);
+        struct type *then_t = ast_type_check (ast->child->next, arena, fs, vs);
+        struct type *else_t = ast_type_check (ast->child->next->next, arena, fs, vs);
         ast_type_match (else_t->kind, then_t->kind, ast->child->next->next->location);
 
         ast->expr_type = then_t;
@@ -745,61 +819,71 @@ ast_type_check (struct ast *ast, struct arena *arena)
       break;
     case AST_COMPOUND:
       {
+        struct scope *child = scope_create (vs);
+
         struct ast *current = ast->child;
         struct type *type;
         while (current != NULL)
-          type = ast_type_check (current, arena),
+          type = ast_type_check (current, arena, fs, child),
           current = current->next;
         ast->expr_type = type;
+
+        scope_destroy (child);
         return type;
       }
       break;
     case AST_DECLARATION:
       {
-        struct type *right = ast_type_check (ast->child->next, arena);
+        struct type *right = ast_type_check (ast->child->next, arena, fs, vs);
         ast_type_match (right->kind, ast->expr_type->kind, ast->location);
-        variables[variables_n].name = ast->child->value.token.value.s;
-        variables[variables_n].type = right;
-        variables_n++;
+
+        struct symbol *symbol;
+
+        symbol = symbol_create (SYMBOL_TYPE, ast->child->value.token.value.s);
+        symbol->value.type = right;
+
+        scope_add (vs, symbol);
+
         return right;
       }
       break;
     case AST_CALL:
       {
-        for (size_t i = 0; i < functions_n; ++i)
-          if (strcmp (ast->child->value.token.value.s, functions[i].name) == 0)
-            {
-              struct ast *current = ast->child->next;
-              size_t n = 0;
+        struct symbol *symbol = scope_find (fs, ast->child->value.token.value.s);
 
-              struct type_function function = functions[i].type->value.function;
+        if (symbol)
+          {
+            struct ast *current = ast->child->next;
+            size_t n = 0;
 
-              while (current != NULL)
-                {
-                  if (n >= function.argument_n)
-                    {
-                      printf ("ERROR: argument mismatch >\n");
-                      abort ();
-                    }
+            struct type_function function = symbol->value.type->value.function;
 
-                  struct type *argument = ast_type_check (current, arena);
+            while (current != NULL)
+              {
+                if (n >= function.argument_n)
+                  {
+                    printf ("ERROR: argument mismatch >\n");
+                    abort ();
+                  }
 
-                  ast_type_match (argument->kind, function.argument_t[n]->kind,
-                                  current->location);
+                struct type *argument = ast_type_check (current, arena, fs, vs);
 
-                  current = current->next;
-                  n++;
-                }
+                ast_type_match (argument->kind, function.argument_t[n]->kind,
+                                current->location);
 
-              if (n < function.argument_n)
-                {
-                  printf ("ERROR: argument mismatch <\n");
-                  abort ();
-                }
+                current = current->next;
+                n++;
+              }
 
-              ast->expr_type = function.return_t;
-              return function.return_t;
-            }
+            if (n < function.argument_n)
+              {
+                printf ("ERROR: argument mismatch <\n");
+                abort ();
+              }
+
+            ast->expr_type = function.return_t;
+            return function.return_t;
+          }
 
         printf ("ERROR: call to undefined function\n");
         abort ();
@@ -825,57 +909,62 @@ ast_type_check (struct ast *ast, struct arena *arena)
             abort ();
           }
 
-        struct comptime_function f;
-        f.name = ast->child->value.token.value.s;
-        f.type = ast_t;
+        struct symbol *new_symbol;
 
-        for (size_t i = 0; i < functions_n; ++i)
+        new_symbol = symbol_create (SYMBOL_TYPE, ast->child->value.token.value.s);
+        new_symbol->value.type = ast_t;
+
+        struct symbol *old_symbol = scope_find (fs, new_symbol->name);
+
+        if (old_symbol)
           {
-            if (strcmp (f.name, functions[i].name) == 0)
+            if (!type_match (new_symbol->value.type, old_symbol->value.type))
               {
-                if (type_match (f.type, functions[i].type))
-                  {
-                    functions[i] = f;
-                    break;
-                  }
                 printf ("ERROR: Declared and defined function's types don't match\n");
                 printf ("NOTE: '");
-                type_debug_print (f.type);
+                type_debug_print (new_symbol->value.type);
                 printf ("' and '");
-                type_debug_print (functions[i].type);
+                type_debug_print (old_symbol->value.type);
                 printf ("'\n");
 
                 abort();
               }
           }
 
-        functions[functions_n++] = f;
+        scope_add (fs, new_symbol);
 
         return ast_t;
-        // printf ("PROTO\n");
       }
       break;
     case AST_FUNCTION:
       {
-        struct type *result = ast_type_check (ast->child, arena);
+        struct type *result = ast_type_check (ast->child, arena, fs, vs);
 
         struct ast *current = ast->child->child->next;
         size_t n = 0;
 
         while (current != NULL)
           {
-            struct comptime_variable v;
-            v.name = current->value.token.value.s;
-            v.type = result->value.function.argument_t[n];
-            // printf ("variable, %s, ", v.name);
-            // type_debug_print (v.type);
-            // printf ("\n");
-            variables[variables_n++] = v;
+            // struct comptime_variable v;
+            // v.name = current->value.token.value.s;
+            // v.type = result->value.function.argument_t[n];
+            // // printf ("variable, %s, ", v.name);
+            // // type_debug_print (v.type);
+            // // printf ("\n");
+            // variables[variables_n++] = v;
+
+            struct symbol *symbol;
+
+            symbol = symbol_create (SYMBOL_TYPE, current->value.token.value.s);
+            symbol->value.type = result->value.function.argument_t[n];
+
+            scope_add (vs, symbol);
+
             current = current->next;
             n++;
           }
 
-        struct type *return_t = ast_type_check (ast->child->next, arena);
+        struct type *return_t = ast_type_check (ast->child->next, arena, fs, vs);
         ast_type_match (return_t->kind, result->value.function.return_t->kind,
                         ast->child->next->location);
 
@@ -887,8 +976,8 @@ ast_type_check (struct ast *ast, struct arena *arena)
         struct ast *current = ast->child;
         while (current != NULL)
           {
-            variables_n = 0;
-            ast_type_check (current, arena);
+            scope_clear (vs);
+            ast_type_check (current, arena, fs, vs);
             current = current->next;
           }
         return NULL;
@@ -1027,12 +1116,16 @@ main (int argc, char *argv[])
 
   struct arena type_check_arena = {0};
 
-  ast_type_check (ast, &type_check_arena);
+  ast_type_check (ast, &type_check_arena, scope_create (NULL), scope_create (NULL));
   // printf ("-------------------\n");
   // ast_debug_print (ast, 0);
   // printf ("-------------------\n");
 
-  (void)generate (ast);
+  struct scope *scope;
+
+  scope = scope_create (NULL);
+
+  (void)generate (ast, scope);
   if (has_error)
     exit (1);
 

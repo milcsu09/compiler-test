@@ -174,7 +174,8 @@ lexer_lex_identifier (struct lexer *lexer)
   struct location location = lexer->location;
   const char *start = lexer->current;
 
-  while (isalnum (*lexer->current) || *lexer->current == '_')
+  while (isalnum (*lexer->current) || *lexer->current == '_'
+         || *lexer->current == '\'')
     lexer_advance (lexer);
 
   // if (strncmp (start, "define", 6) == 0)
